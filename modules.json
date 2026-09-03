@@ -1,0 +1,137 @@
+{
+  "schema_version": 2,
+  "repository": "github.com/faustbrian/go-webauthn",
+  "go_version": "1.26.6",
+  "modules": [
+    {
+      "directory": ".",
+      "module_path": "github.com/faustbrian/go-webauthn",
+      "go_version": "1.26.6",
+      "packages": [
+        {
+          "module_directory": ".",
+          "directory": ".",
+          "name": "planned",
+          "import_path": "github.com/faustbrian/go-webauthn",
+          "kind": "planned entry point",
+          "production": false,
+          "executable": false,
+          "coverage_required": false,
+          "build_required": false,
+          "build_tags": []
+        }
+      ],
+      "purpose": "Planned WebAuthn protocol boundary for registration and authentication ceremonies, relying-party and origin policy, challenge handling, attestation and assertion verification, authenticator metadata, counters, and security-key profiles; no runtime package is implemented or released.",
+      "lifecycle": "planned",
+      "kind": "public library",
+      "releasable": true,
+      "family": "protocols-and-descriptions",
+      "family_label": "Protocols And Descriptions",
+      "family_description": "Standards, envelopes, schemas, descriptions, signatures, and wire interoperability.",
+      "family_order": 3,
+      "version": "",
+      "tag_prefix": "v",
+      "owned_dependencies": [],
+      "reverse_owned_dependencies": [],
+      "external_runtime_dependencies": [],
+      "required_services": [],
+      "build_tags": [],
+      "test_tags": [],
+      "interoperability_tools": [],
+      "specifications": [],
+      "conformance_corpora": [],
+      "provenance": [],
+      "goal_files": [
+        "docs/goal.md"
+      ],
+      "goal_status": "planned",
+      "goal_evidence": [],
+      "cohesion": {
+        "family": "protocols-and-descriptions",
+        "secondary_capabilities": [
+          "cryptography-and-secrets",
+          "data-encoding",
+          "identity-and-access"
+        ],
+        "responsibility": "Plan WebAuthn registration and authentication ceremonies, relying-party and origin policy, bounded protocol parsing, attestation and assertion verification, authenticator metadata, counters, and security-key profiles.",
+        "non_goals": [
+          "Claim that a public package identifier, runtime API, implementation, compatibility promise, protocol conformance, or release currently exists.",
+          "Own identity signup or sign-in orchestration, passkey user experiences, browser JavaScript, sessions, or application authorization policy.",
+          "Own database clients, migrations, transactions, persistence adapters, caches, or background workers."
+        ],
+        "public_package_identifier": "none",
+        "primary_entry_packages": [
+          "github.com/faustbrian/go-webauthn"
+        ],
+        "package_selection": {
+          "github.com/faustbrian/go-webauthn": "Planning identity only; no importable package or runtime API currently exists."
+        },
+        "lifecycle_status": "planned",
+        "maturity": "experimental",
+        "construction_styles": [
+          "new-config",
+          "plain-function",
+          "validated-value"
+        ],
+        "lifecycle_styles": [
+          "stateless"
+        ],
+        "ownership": {
+          "configuration": "caller",
+          "mutable_inputs": [
+            "copy"
+          ],
+          "runtime_resources": "caller",
+          "background_work": "none"
+        },
+        "optional_owned_dependencies": [],
+        "adapters": [],
+        "companions": [],
+        "supported_go": {
+          "minimum": "1.26.6",
+          "tested": [
+            "1.26.6"
+          ]
+        },
+        "supported_platforms": [
+          "portable-go"
+        ],
+        "supported_backends": [],
+        "supported_protocols": [],
+        "documentation": {
+          "readme": "README.md",
+          "api": null,
+          "adoption": null,
+          "security": null,
+          "compatibility": null,
+          "performance": null,
+          "examples": null,
+          "faq": null,
+          "changelog": null,
+          "pkg_go_dev": null,
+          "ecosystem_index": "https://github.com/faustbrian/go-library-tools/blob/v1.4.0/docs/ecosystem/README.md"
+        },
+        "known_good_compatibility_sets": [],
+        "delivery": {
+          "implementation": "not-started",
+          "hardening": "not-started",
+          "release": "not-started"
+        }
+      },
+      "gates": {
+        "api_compatibility": false,
+        "benchmarks": false,
+        "conformance": false,
+        "coverage": false,
+        "documentation": true,
+        "fuzz": false,
+        "interoperability": false,
+        "lint": false,
+        "mutation": false,
+        "race": false,
+        "security": false,
+        "tests": false
+      }
+    }
+  ]
+}
