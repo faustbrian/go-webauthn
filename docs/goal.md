@@ -21,6 +21,9 @@ That record contains proposed contracts; it is not implementation evidence.
   ownership, and delivery lifecycle in schema-v2 engineering metadata.
 - Validate the metadata locally and in hosted CI with immutable,
   checksum-verified `go-library-tools` v1.4.0 tooling.
+- Keep the module non-releasable and release blocked until implementation and
+  executable evidence address the [versioned WebAuthn threat model](security/threat-model-v1.md).
+- Publish a [private vulnerability reporting process](../SECURITY.md).
 - Do not claim a public package identifier, installation path, runtime API,
   compatibility promise, protocol conformance, or released behavior.
 
@@ -29,4 +32,6 @@ That record contains proposed contracts; it is not implementation evidence.
 Source packages, nested modules, dependencies, protocol and API contracts,
 behavior, hardening evidence, compatibility commitments, tags, and releases
 remain outside this planning-only goal. They require separately authorized
-work and their own executable acceptance evidence.
+work and their own executable acceptance evidence. The threat model records
+unresolved implementation risks, not accepted runtime risk or implemented
+controls.

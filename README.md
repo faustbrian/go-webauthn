@@ -1,7 +1,9 @@
 # go-webauthn
 
 > **Status: planned.** This repository does not currently provide an
-> installable package, a released version, or a runtime API.
+> installable package, a released version, or a runtime API. The module is
+> non-releasable; release is blocked pending implementation and executable
+> security evidence.
 
 `go-webauthn` reserves the planned Golib boundary for WebAuthn registration
 and authentication ceremonies, relying-party and origin policy, challenge
@@ -41,6 +43,11 @@ mutable inputs, context-bounded external operations, and no package-owned
 background work. These are design constraints, not claims about released
 behavior.
 
+The versioned [WebAuthn threat model](docs/security/threat-model-v1.md)
+identifies the trust boundaries and security evidence required before release.
+See [SECURITY.md](SECURITY.md) to report a suspected vulnerability privately.
+Neither document establishes a runtime security control.
+
 ## Planning and verification
 
 The [repository goal](docs/goal.md) and `modules.json` record the planning scope
@@ -51,7 +58,8 @@ module from installable and released consumer catalogs. The local
 
 Passing repository checks proves only that the planning scaffold and metadata
 are internally consistent. It does not prove WebAuthn behavior, protocol
-conformance, or an API.
+conformance, security, or an API. Release requires a separately authorized
+implementation and focused executable evidence for the threat-model boundaries.
 
 See the versioned [Golib ecosystem index](https://github.com/faustbrian/go-library-tools/blob/v1.4.0/docs/ecosystem/README.md)
 and [package-family guidance](https://github.com/faustbrian/go-library-tools/blob/v1.4.0/docs/ecosystem/design-language.md#package-families-and-selection)

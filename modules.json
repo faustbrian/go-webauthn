@@ -24,7 +24,7 @@
       "purpose": "Planned WebAuthn protocol boundary for registration and authentication ceremonies, relying-party and origin policy, challenge handling, attestation and assertion verification, authenticator metadata, counters, and security-key profiles; no runtime package is implemented or released.",
       "lifecycle": "planned",
       "kind": "public library",
-      "releasable": true,
+      "releasable": false,
       "family": "protocols-and-descriptions",
       "family_label": "Protocols And Descriptions",
       "family_description": "Standards, envelopes, schemas, descriptions, signatures, and wire interoperability.",
@@ -102,7 +102,7 @@
           "readme": "README.md",
           "api": null,
           "adoption": null,
-          "security": null,
+          "security": "SECURITY.md",
           "compatibility": null,
           "performance": null,
           "examples": null,
@@ -115,7 +115,7 @@
         "delivery": {
           "implementation": "not-started",
           "hardening": "not-started",
-          "release": "not-started"
+          "release": "blocked"
         }
       },
       "gates": {

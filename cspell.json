@@ -3,6 +3,7 @@
   "caseSensitive": false,
   "files": [
     "README.md",
+    "SECURITY.md",
     "docs/**/*.md"
   ],
   "flagWords": [
@@ -18,6 +19,8 @@
   "useGitignore": true,
   "version": "0.2",
   "words": [
+    "CBOR",
+    "COSE",
     "Golib",
     "WebAuthn"
   ]
