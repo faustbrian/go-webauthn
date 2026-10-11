@@ -1,24 +1,25 @@
 GOLIB ?= golib
 
-.PHONY: check ci cohesion fast-check inventory repository-check
+.PHONY: check check-full ci fast-check planning-check check-online cohesion inventory repository-check
 
-check:
-	$(GOLIB) check --all
+# Standalone routes retain the unconditional whole-tree secret scan.
+check ci fast-check:
+	$(MAKE) planning-check
+	$(GOLIB) secrets check
 
-# Requires the process-improvement verifier's local-docs and secrets commands.
-# CI retains its current contract until that verifier is publicly qualified.
-fast-check:
+# CI selects its immutable changed-content secret scan separately.
+planning-check:
 	$(GOLIB) config validate
 	$(GOLIB) repository check
 	$(GOLIB) cohesion check
 	$(GOLIB) specification check
 	$(GOLIB) docs check --local
-	$(GOLIB) secrets check
 
-ci:
-	$(GOLIB) repository check
-	$(GOLIB) cohesion check
+check-online: check
 	$(GOLIB) specification check --online
+
+# Optional broad documentation assurance; not an ordinary CI prerequisite.
+check-full:
 	$(GOLIB) check --all
 
 cohesion:

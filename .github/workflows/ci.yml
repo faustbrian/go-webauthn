@@ -15,20 +15,99 @@ jobs:
   required:
     name: Required
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 5
+    env:
+      GOENV: 'off'
+      GOWORK: 'off'
+      GOTOOLCHAIN: local
+      GOMAXPROCS: '2'
+      GOFLAGS: -p=1
+      GOPROXY: https://proxy.golang.org
+      GOSUMDB: sum.golang.org
+      GOPRIVATE: ''
+      GONOPROXY: ''
+      GONOSUMDB: ''
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+          persist-credentials: false
+      - name: Validate immutable change range
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "${HEAD_SHA}"
+          case "${EVENT_NAME}" in
+            pull_request|push)
+              [[ "${BASE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+              [[ "${BASE_SHA}" != 0000000000000000000000000000000000000000 ]]
+              git cat-file -e "${BASE_SHA}^{commit}"
+              git merge-base --is-ancestor "${BASE_SHA}" "${HEAD_SHA}"
+              ;;
+            schedule|workflow_dispatch) ;;
+            *) echo 'unsupported planning event' >&2; exit 1 ;;
+          esac
+      - name: Initialize private verification resources
+        run: |
+          set -euo pipefail
+          task="$(mktemp -d "${RUNNER_TEMP}/golib-planning.XXXXXX")"
+          {
+            echo "PLANNING_TASK=${task}"
+            echo "GOCACHE=${task}/cache"
+            echo "GOMODCACHE=${task}/mod"
+            echo "GOTMPDIR=${task}/tmp"
+            echo "TMPDIR=${task}/tmp"
+            echo "XDG_CACHE_HOME=${task}/xdg"
+          } >>"${GITHUB_ENV}"
+          mkdir -p "${task}/cache" "${task}/mod" "${task}/tmp" "${task}/xdg"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: .go-version
           cache: false
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: faustbrian/go-library-tools/.github/actions/setup-golib@2bac923d3987eea343982f0d24c78a29751fb649 # v2.1.2
         with:
-          repository: faustbrian/go-library-tools
-          ref: 531e4db50fd81a7201257a7b488a0cf22d333aca
-          path: .golib-tooling
-          persist-credentials: false
-      - uses: ./.golib-tooling/.github/actions/setup-golib
-      - run: make ci
+          source_bootstrap: false
+      - name: Validate local planning contracts
+        run: make planning-check
+      - name: Scan secrets unconditionally
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          case "${EVENT_NAME}" in
+            pull_request|push)
+              timeout --signal=TERM --kill-after=5s 40s golib secrets check --base-sha "${BASE_SHA}"
+              ;;
+            schedule|workflow_dispatch) golib secrets check ;;
+            *) echo 'unsupported planning event' >&2; exit 1 ;;
+          esac
+      - name: Refresh authoritative specification sources
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: golib specification check --online
+      - name: Remove task-owned verification resources
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -n "${PLANNING_TASK:-}" ]]; then
+            case "${PLANNING_TASK}" in
+              "${RUNNER_TEMP}"/golib-planning.*) ;;
+              *) echo 'unexpected planning workspace' >&2; exit 1 ;;
+            esac
+            if [[ -d "${PLANNING_TASK}" ]]; then
+              chmod -R u+w "${PLANNING_TASK}"
+              find "${PLANNING_TASK}" -depth -delete
+            fi
+            test ! -e "${PLANNING_TASK}"
+          fi
+          for target in "${RUNNER_TEMP}/golib-v2.1.2" "${RUNNER_TEMP}/golib-bin"; do
+            if [[ -d "${target}" ]]; then
+              chmod -R u+w "${target}"
+              find "${target}" -depth -delete
+            fi
+            test ! -e "${target}"
+          done
