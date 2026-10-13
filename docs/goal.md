@@ -1,5 +1,8 @@
 # Goal: planned go-webauthn boundary
 
+[Documentation map](index.md) · [Repository README](../README.md)
+[Next: WebAuthn threat model, version 1](security/threat-model-v1.md)
+
 Status: planned
 
 The coordination plan identifies `github.com/faustbrian/go-webauthn` as the

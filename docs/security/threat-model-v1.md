@@ -1,5 +1,8 @@
 # WebAuthn threat model, version 1
 
+[Documentation map](../index.md) · [Repository README](../../README.md)
+[Next: Goal: planned go-webauthn boundary](../goal.md)
+
 Status: planning baseline, 2026-09-24. Scope: the proposed root module of
 `github.com/faustbrian/go-webauthn`. There is no source package, supported
 version, or runtime security control. This model must be revised when concrete
