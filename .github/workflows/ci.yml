@@ -68,7 +68,7 @@ jobs:
         with:
           go-version-file: .go-version
           cache: false
-      - uses: faustbrian/go-library-tools/.github/actions/setup-golib@2bac923d3987eea343982f0d24c78a29751fb649 # v2.1.2
+      - uses: faustbrian/go-library-tools/.github/actions/setup-golib@09b43f49385650c44dd4151a12b0877ca6b48a88 # v2.5.1
         with:
           source_bootstrap: false
       - name: Validate local planning contracts
@@ -104,7 +104,7 @@ jobs:
             fi
             test ! -e "${PLANNING_TASK}"
           fi
-          for target in "${RUNNER_TEMP}/golib-v2.1.2" "${RUNNER_TEMP}/golib-bin"; do
+          for target in "${RUNNER_TEMP}/golib-v2.5.1" "${RUNNER_TEMP}/golib-bin"; do
             if [[ -d "${target}" ]]; then
               chmod -R u+w "${target}"
               find "${target}" -depth -delete
