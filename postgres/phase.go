@@ -33,7 +33,7 @@ var _ kernel.FeatureCommitContributor = (*phase)(nil)
 
 func (*phase) Descriptor() kernel.ContributorDescriptor { return descriptor() }
 func (*phase) FeatureOperations() []identity.FeatureOperation {
-	return []identity.FeatureOperation{operation("begin-create"), operation("begin-get"), operation("register"), operation("assert")}
+	return []identity.FeatureOperation{operation("begin-create"), operation("begin-get"), operation("register"), operation("assert"), operation("begin-get-discoverable"), operation("assert-discoverable")}
 }
 func (p *phase) ValidateFeatureCommand(c identity.Command, plan kernel.CommandPlan) error {
 	if p == nil || p.store == nil || c != p.command {
@@ -49,7 +49,26 @@ func (p *phase) ValidateFeatureCommand(c identity.Command, plan kernel.CommandPl
 	return nil
 }
 func (p *phase) current(ctx context.Context, w kernel.Work) error {
-	rows, e := w.Query(ctx, `SELECT status FROM identity.users WHERE tenant_id=$1 AND user_id=$2 FOR SHARE`, string(p.binding.TenantID), string(p.binding.UserID))
+	user := p.binding.UserID
+	if p.binding.AnonymousFlowID != "" {
+		if p.creation != nil {
+			return nil
+		}
+		if p.assertion == nil {
+			return identity.ForbiddenError{}
+		}
+		user = p.assertion.Before.UserID
+	}
+	query := `SELECT status FROM identity.users WHERE tenant_id=$1 AND user_id=$2 FOR SHARE`
+	args := []any{string(p.binding.TenantID), string(user)}
+	if p.binding.AnonymousFlowID != "" {
+		// DiscoverableStore's mapping is current authority, not metadata. Lock
+		// it through commit so a non-key tenant/user reassignment cannot race
+		// the verified credential snapshot; the final fence rechecks it too.
+		query = `SELECT u.status FROM identity.users u JOIN webauthn.user_handles h ON h.tenant_id=u.tenant_id AND h.user_id=u.user_id JOIN webauthn.relying_parties r ON r.rp_id=h.rp_id AND r.tenant_id=u.tenant_id WHERE u.tenant_id=$1 AND u.user_id=$2 AND h.rp_id=$3 AND h.user_handle=$4 FOR SHARE OF u,h,r`
+		args = append(args, p.assertion.Before.RPID, p.assertion.Before.UserHandle)
+	}
+	rows, e := w.Query(ctx, query, args...)
 	if e != nil {
 		return e
 	}
@@ -135,38 +154,40 @@ func (p *phase) applyCreation(ctx context.Context, w kernel.Work) error {
 	if tenant != string(i.Context.TenantID) {
 		return identity.ForbiddenError{}
 	}
-	if _, e = w.Exec(ctx, `INSERT INTO webauthn.user_handles(rp_id,user_handle,tenant_id,user_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, i.RPID, i.UserHandle, string(i.Context.TenantID), string(i.Context.UserID)); e != nil {
-		return e
-	}
-	rows, e = w.Query(ctx, `SELECT tenant_id,user_id FROM webauthn.user_handles WHERE rp_id=$1 AND user_handle=$2`, i.RPID, i.UserHandle)
-	if e != nil {
-		return e
-	}
-	var user string
-	if !rows.Next() {
+	if i.Kind != "get-discoverable" {
+		if _, e = w.Exec(ctx, `INSERT INTO webauthn.user_handles(rp_id,user_handle,tenant_id,user_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, i.RPID, i.UserHandle, string(i.Context.TenantID), string(i.Context.UserID)); e != nil {
+			return e
+		}
+		rows, e = w.Query(ctx, `SELECT tenant_id,user_id FROM webauthn.user_handles WHERE rp_id=$1 AND user_handle=$2`, i.RPID, i.UserHandle)
+		if e != nil {
+			return e
+		}
+		var user string
+		if !rows.Next() {
+			rows.Close()
+			return identity.ConflictError{}
+		}
+		e = rows.Scan(&tenant, &user)
+		if rows.Next() {
+			e = identity.UnavailableError{}
+		}
+		rowerr = rows.Err()
 		rows.Close()
-		return identity.ConflictError{}
-	}
-	e = rows.Scan(&tenant, &user)
-	if rows.Next() {
-		e = identity.UnavailableError{}
-	}
-	rowerr = rows.Err()
-	rows.Close()
-	if e != nil {
-		return e
-	}
-	if rowerr != nil {
-		return rowerr
-	}
-	if tenant != string(i.Context.TenantID) || user != string(i.Context.UserID) {
-		return identity.ConflictError{}
+		if e != nil {
+			return e
+		}
+		if rowerr != nil {
+			return rowerr
+		}
+		if tenant != string(i.Context.TenantID) || user != string(i.Context.UserID) {
+			return identity.ConflictError{}
+		}
 	}
 	wire, e := json.Marshal(r)
 	if e != nil {
 		return identity.InvalidInputError{Field: "ceremony"}
 	}
-	n, e := w.Exec(ctx, `INSERT INTO webauthn.ceremonies(ceremony_id,rp_id,tenant_id,user_id,kind,challenge_digest,expires_at,version,record) VALUES($1,$2,$3,$4,$5,$6,$7,1,$8::jsonb) ON CONFLICT DO NOTHING`, r.ID, i.RPID, string(i.Context.TenantID), string(i.Context.UserID), i.Kind, r.ChallengeDigest[:], r.ExpiresAt, string(wire))
+	n, e := w.Exec(ctx, `INSERT INTO webauthn.ceremonies(ceremony_id,rp_id,tenant_id,user_id,kind,challenge_digest,expires_at,version,record,anonymous_flow_id) VALUES($1,$2,$3,NULLIF($4,''),$5,$6,$7,1,$8::jsonb,NULLIF($9,'')) ON CONFLICT DO NOTHING`, r.ID, i.RPID, string(i.Context.TenantID), string(i.Context.UserID), i.Kind, r.ChallengeDigest[:], r.ExpiresAt, string(wire), i.Context.AnonymousFlowID)
 	if e != nil {
 		return e
 	}
@@ -181,7 +202,7 @@ func (p *phase) consume(ctx context.Context, w kernel.Work) error {
 	if e != nil {
 		return identity.InvalidInputError{Field: "ceremony"}
 	}
-	n, e := w.Exec(ctx, `UPDATE webauthn.ceremonies SET consumed_by=$1 WHERE ceremony_id=$2 AND tenant_id=$3 AND user_id=$4 AND rp_id=$5 AND consumed_by IS NULL AND expires_at>clock_timestamp() AND version=1 AND record=$6::jsonb`, string(p.binding.CommandID), r.ID, string(p.binding.TenantID), string(p.binding.UserID), r.Intent.RPID, string(wire))
+	n, e := w.Exec(ctx, `UPDATE webauthn.ceremonies SET consumed_by=$1 WHERE ceremony_id=$2 AND tenant_id=$3 AND COALESCE(user_id,'')=$4 AND rp_id=$5 AND consumed_by IS NULL AND expires_at>clock_timestamp() AND version=1 AND record=$6::jsonb AND COALESCE(anonymous_flow_id,'')=$7`, string(p.binding.CommandID), r.ID, string(p.binding.TenantID), string(p.binding.UserID), r.Intent.RPID, string(wire), p.binding.AnonymousFlowID)
 	if e != nil {
 		return e
 	}
@@ -221,7 +242,7 @@ func (p *phase) applyAssertion(ctx context.Context, w kernel.Work) error {
 	if e != nil {
 		return identity.InvalidInputError{Field: "credential"}
 	}
-	n, e := w.Exec(ctx, `UPDATE webauthn.credentials SET version=$1::numeric,record=$2::jsonb WHERE rp_id=$3 AND credential_id=$4 AND tenant_id=$5 AND user_id=$6 AND version=$7::numeric AND record=$8::jsonb`, strconv.FormatUint(m.After.Version, 10), string(after), m.Before.RPID, m.Before.ID, string(m.Context.TenantID), string(m.Context.UserID), strconv.FormatUint(m.Before.Version, 10), string(before))
+	n, e := w.Exec(ctx, `UPDATE webauthn.credentials c SET version=$1::numeric,record=$2::jsonb WHERE rp_id=$3 AND credential_id=$4 AND tenant_id=$5 AND user_id=$6 AND version=$7::numeric AND record=$8::jsonb AND user_handle=$9 AND EXISTS(SELECT 1 FROM webauthn.user_handles h WHERE h.rp_id=c.rp_id AND h.user_handle=c.user_handle AND h.tenant_id=c.tenant_id AND h.user_id=c.user_id)`, strconv.FormatUint(m.After.Version, 10), string(after), m.Before.RPID, m.Before.ID, string(m.Context.TenantID), string(m.Before.UserID), strconv.FormatUint(m.Before.Version, 10), string(before), m.Before.UserHandle)
 	if e != nil {
 		return e
 	}
@@ -259,7 +280,7 @@ func (p *phase) persistEvidence(ctx context.Context, w kernel.Work) error {
 	if after != nil {
 		afterValue = string(after)
 	}
-	n, e := w.Exec(ctx, `INSERT INTO webauthn.effects(command_id,tenant_id,user_id,actor_id,purpose,record_id,fingerprint,ceremony_id,ceremony,before_credential,after_credential) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb) ON CONFLICT DO NOTHING`, string(b.CommandID), string(b.TenantID), string(b.UserID), string(b.ActorID), b.OperationID, b.RecordID, fp[:], p.ceremony.ID, string(ceremony), beforeValue, afterValue)
+	n, e := w.Exec(ctx, `INSERT INTO webauthn.effects(command_id,tenant_id,user_id,actor_id,purpose,record_id,fingerprint,ceremony_id,ceremony,before_credential,after_credential,anonymous_flow_id) VALUES($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,NULLIF($12,'')) ON CONFLICT DO NOTHING`, string(b.CommandID), string(b.TenantID), string(b.UserID), string(b.ActorID), b.OperationID, b.RecordID, fp[:], p.ceremony.ID, string(ceremony), beforeValue, afterValue, b.AnonymousFlowID)
 	if e != nil {
 		return e
 	}

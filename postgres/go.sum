@@ -69,8 +69,8 @@ github.com/faustbrian/go-transactional-outbox/postgres/identity v0.0.0-202610151
 github.com/faustbrian/go-transactional-outbox/postgres/identity v0.0.0-20261015133445-5c139522d060/go.mod h1:79fcXIkE1IngyuesA+Z2sr2mvbZeTBpaizlYtgW9nUc=
 github.com/faustbrian/go-transactional-outbox/v2 v2.0.2-0.20261015062550-37ea15436ae9 h1:edZCn0ysFwWyXS5ihryw1X5QF7kzlV17WbGQzLH6DTE=
 github.com/faustbrian/go-transactional-outbox/v2 v2.0.2-0.20261015062550-37ea15436ae9/go.mod h1:qiFFS93F3PU3bdnC/g/0dhkWsxjjqBiHWl/ctFxKTRw=
-github.com/faustbrian/go-webauthn v0.0.0-20261019011801-531225ae8a14 h1:1SBYRcmyG6P3G3jkhhQOpuolt4rGWA4iXrMOQhJ41I4=
-github.com/faustbrian/go-webauthn v0.0.0-20261019011801-531225ae8a14/go.mod h1:GEdL4XWkuetUkfxRonD6dyoLxn6sTmrPruYVrx6RoHs=
+github.com/faustbrian/go-webauthn v0.0.0-20261019072737-479cf9ab923f h1:KBGUfQD3K1yhybgQgnDxd2/08jiHIUrUC/j6LGwdclU=
+github.com/faustbrian/go-webauthn v0.0.0-20261019072737-479cf9ab923f/go.mod h1:GEdL4XWkuetUkfxRonD6dyoLxn6sTmrPruYVrx6RoHs=
 github.com/felixge/httpsnoop v1.1.0 h1:3YtUj32ZZkqZtt3sZZsClsymw/QDuVfpNhoA31zeORc=
 github.com/felixge/httpsnoop v1.1.0/go.mod h1:Zqxgdd+1Rkcz8euOqdr7lqgCRJztwr5hp9vDSi5UZCE=
 github.com/go-logr/logr v1.4.4 h1:tG4xh9yMsRCAiodLVTxyrkzSZ9+o0L1Kg/+cPVcbP/8=

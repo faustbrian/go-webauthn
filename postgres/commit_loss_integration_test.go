@@ -238,6 +238,124 @@ func TestCommittedAcknowledgementLossPostgres(t *testing.T) {
 	})
 }
 
+func TestDiscoverableAcknowledgementLossPostgres(t *testing.T) {
+	ctx, primary, coordinator, native := nativeFixture(t)
+	key, _ := webauthn.NewChallengeDigestKey(bytes.Repeat([]byte{51}, 32))
+	config := webauthn.Config{TenantID: "tenant-a", RelyingParty: webauthn.RelyingParty{ID: "example.com", Name: "Discoverable loss", Origins: []string{"https://login.example.com"}, Version: 1}, ChallengeKey: key, MaximumDuration: 10 * time.Second}
+	svc, e := webauthn.NewDiscoverable(config, webauthn.Dependencies{Store: native})
+	if e != nil {
+		t.Fatal(e)
+	}
+	fresh := func(anonymous bool) webauthn.CeremonyContext {
+		id, e := identity.NewCommandID()
+		if e != nil {
+			t.Fatal(e)
+		}
+		c := webauthn.CeremonyContext{CommandID: id, TenantID: "tenant-a", UserID: "user-a", ActorID: "actor-a", CorrelationID: "discoverable-loss"}
+		if anonymous {
+			c.UserID = ""
+			c.AnonymousFlowID = "loss-pre-auth"
+		}
+		return c
+	}
+	handle, id := bytes.Repeat([]byte{52}, 32), bytes.Repeat([]byte{53}, 32)
+	private, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	reg, e := svc.BeginRegistration(ctx, webauthn.BeginRegistrationRequest{Context: fresh(false), UserHandle: handle, Origin: config.RelyingParty.Origins[0], ResidentKeyRequired: true})
+	if e != nil {
+		t.Fatal(e)
+	}
+	r, _ := reg.Ceremony()
+	challenge := optionChallenge(t, ctx, reg.TransferJSON)
+	if _, e = svc.VerifyRegistration(ctx, webauthn.VerifyRegistrationRequest{Context: fresh(false), CeremonyID: r.ID, Origin: r.Intent.Origin, ExpectedVersion: 1, Response: registrationResponse(t, private, id, challenge, 0x45, 0)}); e != nil {
+		t.Fatal(e)
+	}
+	cut := &commitCut{}
+	pool, e := database.New(ctx, database.Config{DSN: os.Getenv("WEBAUTHN_TEST_DSN"), MaxConns: 2, SessionInit: func(ctx context.Context, c *pgx.Conn) error { _, e := c.Exec(ctx, `SET search_path=public`); return e }, Configure: func(c *database.PoolConfig) error {
+		dial := c.ConnConfig.DialFunc
+		c.ConnConfig.DialFunc = func(ctx context.Context, network, address string) (net.Conn, error) {
+			connection, e := dial(ctx, network, address)
+			if e != nil {
+				return nil, e
+			}
+			return &commitCutConn{Conn: connection, cut: cut}, nil
+		}
+		return nil
+	}})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer pool.Close(context.Background())
+	restart := func() {
+		store, e := webauthnpg.New(pool, webauthnpg.Config{Coordinator: coordinator, PolicyID: "discoverable-loss", PolicyVersion: 1})
+		if e != nil {
+			t.Fatal(e)
+		}
+		svc, e = webauthn.NewDiscoverable(config, webauthn.Dependencies{Store: store})
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	restart()
+	begin := webauthn.BeginDiscoverableAssertionRequest{Context: fresh(true), Origin: r.Intent.Origin}
+	cut.remaining.Store(2)
+	options, e := svc.BeginDiscoverableAssertion(ctx, begin)
+	var unknown webauthn.UnknownCommit
+	if !errors.As(e, &unknown) || unknown.CommandID != begin.Context.CommandID || !cut.cut.Load() {
+		t.Fatal("anonymous creation acknowledgement not unknown", e)
+	}
+	if _, ok := options.Ceremony(); ok {
+		t.Fatal("unknown anonymous creation exposed custody")
+	}
+	restart()
+	if out, e := svc.Recover(ctx, webauthn.RecoveryRequest{Context: begin.Context, Operation: webauthn.BeginDiscoverableAssertionOperation}); e != nil || out != identity.CommitOutcomeCommitted {
+		t.Fatal("anonymous creation recovery", e)
+	}
+	if retry, e := svc.BeginDiscoverableAssertion(ctx, begin); e != nil {
+		t.Fatal(e)
+	} else if e = retry.TransferJSON(ctx, func(context.Context, []byte) error { t.Fatal("lost anonymous challenge revealed"); return nil }); e == nil {
+		t.Fatal("lost anonymous challenge recreated")
+	}
+	begin.Context = fresh(true)
+	options, e = svc.BeginDiscoverableAssertion(ctx, begin)
+	if e != nil {
+		t.Fatal(e)
+	}
+	c, _ := options.Ceremony()
+	challenge = optionChallenge(t, ctx, options.TransferJSON)
+	request := webauthn.VerifyDiscoverableAssertionRequest{Context: fresh(true), CeremonyID: c.ID, Origin: r.Intent.Origin, ExpectedVersion: 1, Response: assertionResponse(t, private, id, handle, challenge, 0x05, 1)}
+	cut.cut.Store(false)
+	cut.remaining.Store(2)
+	verified, e := svc.VerifyDiscoverableAssertion(ctx, request)
+	if !errors.As(e, &unknown) || unknown.CommandID != request.Context.CommandID || !cut.cut.Load() {
+		t.Fatal("anonymous assertion acknowledgement not unknown", e)
+	}
+	if _, ok := verified.Credential(); ok {
+		t.Fatal("unknown anonymous assertion authenticated")
+	}
+	restart()
+	if out, e := svc.Recover(ctx, webauthn.RecoveryRequest{Context: request.Context, Operation: webauthn.DiscoverableAssertionOperation, CredentialID: id}); e != nil || out != identity.CommitOutcomeCommitted {
+		t.Fatal("anonymous assertion recovery", e)
+	}
+	var before [3]int
+	if e = primary.Raw().QueryRow(ctx, `SELECT (SELECT count(*) FROM webauthn.effects),(SELECT count(*) FROM audit.identity_command_bindings),(SELECT count(*) FROM public.outbox_messages)`).Scan(&before[0], &before[1], &before[2]); e != nil {
+		t.Fatal(e)
+	}
+	var replay webauthn.Replay
+	if v, e := svc.VerifyDiscoverableAssertion(ctx, request); !errors.As(e, &replay) {
+		t.Fatal("anonymous lost-ack replay", e)
+	} else if _, ok := v.Credential(); ok {
+		t.Fatal("anonymous lost-ack replay renewed verification")
+	}
+	var after [3]int
+	if e = primary.Raw().QueryRow(ctx, `SELECT (SELECT count(*) FROM webauthn.effects),(SELECT count(*) FROM audit.identity_command_bindings),(SELECT count(*) FROM public.outbox_messages)`).Scan(&after[0], &after[1], &after[2]); e != nil || after != before {
+		t.Fatal("anonymous replay repeated effects", e)
+	}
+	var version string
+	if e = primary.Raw().QueryRow(ctx, `SELECT version::text FROM webauthn.credentials WHERE rp_id='example.com' AND credential_id=$1 AND record->>'Counter'='1'`, id).Scan(&version); e != nil || version != "2" {
+		t.Fatal("lost-ack counter transition missing", e)
+	}
+}
+
 type commitCut struct {
 	remaining atomic.Int32
 	cut       atomic.Bool

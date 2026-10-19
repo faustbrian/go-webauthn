@@ -25,8 +25,27 @@ func (MigrationSource) Load(ctx context.Context) ([]migrations.Migration, error)
 	if e != nil {
 		return nil, webauthn.Unavailable{}
 	}
-	return []migrations.Migration{m}, nil
+	d, e := migrations.NewMigration(2, "webauthn_discoverable", migrations.TransactionModeDefault, discoverableSQL, "")
+	if e != nil {
+		return nil, webauthn.Unavailable{}
+	}
+	return []migrations.Migration{m, d}, nil
 }
+
+// Existing rows remain identified; old binaries cannot select anonymous NULL
+// subjects. New binaries require this forward migration before activation.
+const discoverableSQL = `ALTER TABLE webauthn.ceremonies ALTER COLUMN user_id DROP NOT NULL;
+ALTER TABLE webauthn.ceremonies ADD COLUMN anonymous_flow_id identity.directory_id;
+ALTER TABLE webauthn.ceremonies DROP CONSTRAINT ceremonies_kind_check;
+ALTER TABLE webauthn.ceremonies ADD CONSTRAINT ceremonies_subject_kind CHECK(
+ (kind IN ('create','get') AND user_id IS NOT NULL AND anonymous_flow_id IS NULL) OR
+ (kind='get-discoverable' AND user_id IS NULL AND anonymous_flow_id IS NOT NULL));
+ALTER TABLE webauthn.effects ALTER COLUMN user_id DROP NOT NULL;
+ALTER TABLE webauthn.effects ADD COLUMN anonymous_flow_id identity.directory_id;
+ALTER TABLE webauthn.effects ADD CONSTRAINT effects_subject_namespace CHECK(
+ (user_id IS NOT NULL AND anonymous_flow_id IS NULL) OR
+ (user_id IS NULL AND anonymous_flow_id IS NOT NULL AND purpose IN ('webauthn.begin-get-discoverable','webauthn.assert-discoverable')));
+`
 
 const schemaSQL = `CREATE SCHEMA webauthn;
 CREATE TABLE webauthn.relying_parties (

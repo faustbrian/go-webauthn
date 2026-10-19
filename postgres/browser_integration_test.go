@@ -26,6 +26,14 @@ import (
 // handwritten signer. Both browser DTOs cross the supported core/native Store.
 // Run alone against a fresh task database, with an explicit browser executable.
 func TestBrowserRegistrationAssertionPostgres(t *testing.T) {
+	browserRegistrationAssertion(t, false)
+}
+
+func TestBrowserDiscoverableAssertionPostgres(t *testing.T) {
+	browserRegistrationAssertion(t, true)
+}
+
+func browserRegistrationAssertion(t *testing.T, discoverable bool) {
 	ctx, _, _, store := nativeFixture(t)
 	binary := os.Getenv("WEBAUTHN_BROWSER_BINARY")
 	if binary == "" {
@@ -43,7 +51,12 @@ func TestBrowserRegistrationAssertionPostgres(t *testing.T) {
 		t.Fatal(e)
 	}
 	config := webauthn.Config{TenantID: "tenant-a", RelyingParty: webauthn.RelyingParty{ID: "localhost", Name: "Browser fixture", Origins: []string{origin}, Version: 1}, ChallengeKey: key, DevelopmentLocalhostHTTP: true, MaximumDuration: 10 * time.Second, Extensions: webauthn.ExtensionRequestSet{CredentialProperties: true, CredentialProtection: 3, EnforceCredentialProtection: true}}
-	svc, e := webauthn.New(config, webauthn.Dependencies{Store: store})
+	var svc webauthn.Service
+	if discoverable {
+		svc, e = webauthn.NewDiscoverable(config, webauthn.Dependencies{Store: store})
+	} else {
+		svc, e = webauthn.New(config, webauthn.Dependencies{Store: store})
+	}
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -55,7 +68,7 @@ func TestBrowserRegistrationAssertionPostgres(t *testing.T) {
 		return webauthn.CeremonyContext{CommandID: id, TenantID: "tenant-a", UserID: "user-a", ActorID: "actor-a", CorrelationID: "browser-test"}
 	}
 	handle := bytes.Repeat([]byte{15}, 32)
-	registrationOptions, e := svc.BeginRegistration(ctx, webauthn.BeginRegistrationRequest{Context: fresh(), UserHandle: handle, Origin: origin})
+	registrationOptions, e := svc.BeginRegistration(ctx, webauthn.BeginRegistrationRequest{Context: fresh(), UserHandle: handle, Origin: origin, ResidentKeyRequired: discoverable})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -75,7 +88,21 @@ func TestBrowserRegistrationAssertionPostgres(t *testing.T) {
 	if !ok || credential.Algorithm != -7 || credential.Extensions.CredentialProperties == nil || credential.Extensions.CredentialProtection == nil || credential.Extensions.CredentialProtection.Policy != 3 {
 		t.Fatal("actual selected browser extension/algorithm profile missing")
 	}
-	assertionOptions, e := svc.BeginAssertion(ctx, webauthn.BeginAssertionRequest{Context: fresh(), UserHandle: handle, Origin: origin, AllowedCredentials: [][]byte{credential.ID}})
+	if discoverable && !credential.Extensions.CredentialProperties.ResidentKey {
+		t.Fatal("browser did not create resident credential")
+	}
+	anonymous := func() webauthn.CeremonyContext {
+		c := fresh()
+		c.UserID = ""
+		c.AnonymousFlowID = "browser-pre-auth"
+		return c
+	}
+	var assertionOptions webauthn.AssertionOptions
+	if discoverable {
+		assertionOptions, e = svc.(webauthn.DiscoverableService).BeginDiscoverableAssertion(ctx, webauthn.BeginDiscoverableAssertionRequest{Context: anonymous(), Origin: origin})
+	} else {
+		assertionOptions, e = svc.BeginAssertion(ctx, webauthn.BeginAssertionRequest{Context: fresh(), UserHandle: handle, Origin: origin, AllowedCredentials: [][]byte{credential.ID}})
+	}
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -83,15 +110,31 @@ func TestBrowserRegistrationAssertionPostgres(t *testing.T) {
 	if e = assertionOptions.TransferJSON(ctx, func(_ context.Context, wire []byte) error { options = bytes.Clone(wire); return nil }); e != nil {
 		t.Fatal(e)
 	}
+	if discoverable {
+		var doc struct {
+			PublicKey map[string]json.RawMessage `json:"publicKey"`
+		}
+		if json.Unmarshal(options, &doc) != nil {
+			t.Fatal("browser options")
+		}
+		if _, ok := doc.PublicKey["allowCredentials"]; ok {
+			t.Fatal("usernameless options included allowlist")
+		}
+	}
 	assertion := browser.operation(t, "get", options)
 	clear(options)
-	result, e := svc.VerifyAssertion(ctx, webauthn.VerifyAssertionRequest{Context: fresh(), CeremonyID: assertionCeremony.ID, Origin: origin, ExpectedVersion: 1, ExpectedCredentialVersion: credential.Version, Response: assertion})
+	var result webauthn.VerifiedAssertion
+	if discoverable {
+		result, e = svc.(webauthn.DiscoverableService).VerifyDiscoverableAssertion(ctx, webauthn.VerifyDiscoverableAssertionRequest{Context: anonymous(), CeremonyID: assertionCeremony.ID, Origin: origin, ExpectedVersion: 1, Response: assertion})
+	} else {
+		result, e = svc.VerifyAssertion(ctx, webauthn.VerifyAssertionRequest{Context: fresh(), CeremonyID: assertionCeremony.ID, Origin: origin, ExpectedVersion: 1, ExpectedCredentialVersion: credential.Version, Response: assertion})
+	}
 	clear(assertion)
 	if e != nil {
 		t.Fatal("actual Chromium assertion rejected", e)
 	}
 	final, ok := result.Credential()
-	if !ok || final.Version != 2 || final.Counter <= credential.Counter || final.Extensions.CredentialProtection == nil || final.Extensions.CredentialProtection.Policy != 3 || final.Extensions.CredentialProtection.Authority != webauthn.UnattestedAuthenticator || final.Extensions.CredentialProperties == nil || final.Extensions.CredentialProperties.Authority != webauthn.BrowserReported {
+	if !ok || final.UserID != "user-a" || !bytes.Equal(final.UserHandle, handle) || final.Version != 2 || final.Counter <= credential.Counter || final.Extensions.CredentialProtection == nil || final.Extensions.CredentialProtection.Policy != 3 || final.Extensions.CredentialProtection.Authority != webauthn.UnattestedAuthenticator || final.Extensions.CredentialProperties == nil || final.Extensions.CredentialProperties.Authority != webauthn.BrowserReported {
 		t.Fatal("browser signature/counter was not finalized")
 	}
 }

@@ -48,6 +48,7 @@ type Store struct {
 func (Store) Format(s fmt.State, _ rune) { _, _ = s.Write([]byte("webauthnpostgres.Store(redacted)")) }
 
 var _ webauthn.Store = (*Store)(nil)
+var _ webauthn.DiscoverableStore = (*Store)(nil)
 
 // New validates the concrete durable composition without IO. Constructors retain
 // no Work, transaction or foreign coordinator. Each execution freezes the same
@@ -86,7 +87,11 @@ func (s *Store) runtime(p *phase) (*kernel.Coordinator, *kernel.ContributorRegis
 	return c, r, e
 }
 func operation(name string) identity.FeatureOperation {
-	return identity.FeatureOperation{Owner: "webauthn", OperationID: "webauthn." + name, SchemaID: "webauthn-ceremony-v1", SchemaVersion: 1, RecordRequirement: identity.FeatureRecordRequired}
+	op := identity.FeatureOperation{Owner: "webauthn", OperationID: "webauthn." + name, SchemaID: "webauthn-ceremony-v1", SchemaVersion: 1, RecordRequirement: identity.FeatureRecordRequired}
+	if name == "begin-get-discoverable" || name == "assert-discoverable" {
+		op.SubjectRequirement = identity.FeatureSubjectAnonymousFlow
+	}
+	return op
 }
 func descriptor() kernel.ContributorDescriptor {
 	return kernel.ContributorDescriptor{Owner: "webauthn/postgres", ContractID: "webauthn.ceremony", Version: 1}
@@ -98,7 +103,7 @@ func targetID(id []byte) string {
 
 func (s *Store) command(p *phase, c webauthn.CeremonyContext, name, record string, payload any, before, after uint64) error {
 	op := operation(name)
-	b := identity.CommandBinding{CommandID: c.CommandID, TenantID: c.TenantID, UserID: c.UserID, ActorID: c.ActorID, ActorKind: authorization.SubjectServiceAccount, OperationID: op.OperationID, PolicyID: s.config().PolicyID, PolicyVersion: s.config().PolicyVersion, SchemaID: op.SchemaID, SchemaVersion: 1, CorrelationID: c.CorrelationID, RecordID: record}
+	b := identity.CommandBinding{CommandID: c.CommandID, TenantID: c.TenantID, UserID: c.UserID, AnonymousFlowID: c.AnonymousFlowID, ActorID: c.ActorID, ActorKind: authorization.SubjectServiceAccount, OperationID: op.OperationID, PolicyID: s.config().PolicyID, PolicyVersion: s.config().PolicyVersion, SchemaID: op.SchemaID, SchemaVersion: 1, CorrelationID: c.CorrelationID, RecordID: record}
 	wire, e := json.Marshal(payload)
 	if e != nil || len(wire) > 262144 {
 		return webauthn.Invalid{Field: "transition"}
@@ -216,7 +221,11 @@ func (s *Store) FinalizeAssertion(ctx context.Context, t webauthn.AssertionTrans
 		return webauthn.Credential{}, identity.CommitOutcomeInvalid, webauthn.Invalid{Field: "assertion"}
 	}
 	p := &phase{store: s, assertion: &m, ceremony: m.Ceremony}
-	if e = s.command(p, m.Context, "assert", targetID(m.Before.ID), m, m.Before.Version, m.After.Version); e != nil {
+	name := "assert"
+	if m.Ceremony.Intent.Kind == "get-discoverable" {
+		name = "assert-discoverable"
+	}
+	if e = s.command(p, m.Context, name, targetID(m.Before.ID), m, m.Before.Version, m.After.Version); e != nil {
 		return webauthn.Credential{}, identity.CommitOutcomeInvalid, e
 	}
 	ctx, cancel := context.WithTimeout(ctx, s.config().Coordinator.MaximumDuration)
@@ -237,7 +246,7 @@ func (s *Store) LoadCeremony(ctx context.Context, q webauthn.Lookup) (webauthn.C
 	ctx, cancel := context.WithTimeout(ctx, s.config().Coordinator.MaximumDuration)
 	defer cancel()
 	var wire []byte
-	e := s.pool.Raw().QueryRow(ctx, `SELECT record FROM webauthn.ceremonies WHERE ceremony_id=$1 AND tenant_id=$2 AND user_id=$3 AND rp_id=$4`, q.CeremonyID, string(q.Context.TenantID), string(q.Context.UserID), q.RPID).Scan(&wire)
+	e := s.pool.Raw().QueryRow(ctx, `SELECT record FROM webauthn.ceremonies WHERE ceremony_id=$1 AND tenant_id=$2 AND COALESCE(user_id,'')=$3 AND rp_id=$4 AND COALESCE(anonymous_flow_id,'')=$5`, q.CeremonyID, string(q.Context.TenantID), string(q.Context.UserID), q.RPID, q.Context.AnonymousFlowID).Scan(&wire)
 	var r webauthn.CeremonyRecord
 	if e != nil {
 		return r, translate(e)
@@ -266,6 +275,30 @@ func (s *Store) LoadCredential(ctx context.Context, q webauthn.Lookup, id []byte
 	}
 	if len(wire) > 32768 || json.Unmarshal(wire, &c) != nil || !bytes.Equal(c.ID, id) {
 		return c, webauthn.Unavailable{}
+	}
+	return c, nil
+}
+
+// LoadDiscoverableCredential resolves a mandatory RP-wide credential/handle
+// mapping within a trusted tenant and pre-auth ceremony. It grants no authority;
+// the participant rechecks active subject and mapping at finalization.
+func (s *Store) LoadDiscoverableCredential(ctx context.Context, q webauthn.Lookup, id, handle []byte) (webauthn.Credential, error) {
+	if ctx == nil || !s.usable() || q.Context.UserID != "" || q.Context.AnonymousFlowID == "" || len(id) == 0 || len(id) > 1024 || len(handle) != 32 {
+		return webauthn.Credential{}, webauthn.Invalid{Field: "lookup"}
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.config().Coordinator.MaximumDuration)
+	defer cancel()
+	var wire []byte
+	e := s.pool.Raw().QueryRow(ctx, `SELECT before_credential FROM webauthn.effects WHERE command_id=$1 AND tenant_id=$2 AND user_id IS NULL AND anonymous_flow_id=$3 AND actor_id=$4 AND purpose='webauthn.assert-discoverable' AND ceremony_id=$5 AND before_credential->>'RPID'=$6`, string(q.Context.CommandID), string(q.Context.TenantID), q.Context.AnonymousFlowID, string(q.Context.ActorID), q.CeremonyID, q.RPID).Scan(&wire)
+	if errors.Is(e, pgx.ErrNoRows) {
+		e = s.pool.Raw().QueryRow(ctx, `SELECT c.record FROM webauthn.credentials c JOIN webauthn.user_handles h ON h.rp_id=c.rp_id AND h.user_handle=c.user_handle AND h.tenant_id=c.tenant_id AND h.user_id=c.user_id JOIN webauthn.relying_parties r ON r.rp_id=c.rp_id AND r.tenant_id=c.tenant_id WHERE c.rp_id=$1 AND c.credential_id=$2 AND c.user_handle=$3 AND c.tenant_id=$4`, q.RPID, id, handle, string(q.Context.TenantID)).Scan(&wire)
+	}
+	var c webauthn.Credential
+	if e != nil {
+		return c, translate(e)
+	}
+	if len(wire) > 32768 || json.Unmarshal(wire, &c) != nil || !bytes.Equal(c.ID, id) || !bytes.Equal(c.UserHandle, handle) || c.TenantID != q.Context.TenantID || c.RPID != q.RPID {
+		return webauthn.Credential{}, webauthn.Denied{}
 	}
 	return c, nil
 }
@@ -303,6 +336,11 @@ func (s *Store) Recover(ctx context.Context, r webauthn.RecoveryRequest) (identi
 	case webauthn.AssertionOperation:
 		name = "assert"
 		record = targetID(r.CredentialID)
+	case webauthn.BeginDiscoverableAssertionOperation:
+		name = "begin-get-discoverable"
+	case webauthn.DiscoverableAssertionOperation:
+		name = "assert-discoverable"
+		record = targetID(r.CredentialID)
 	default:
 		return identity.CommitOutcomeInvalid, webauthn.Invalid{Field: "recovery"}
 	}
@@ -311,8 +349,14 @@ func (s *Store) Recover(ctx context.Context, r webauthn.RecoveryRequest) (identi
 	if e != nil {
 		return identity.CommitOutcomeInvalid, webauthn.Unavailable{}
 	}
-	q := identity.RecoveryQuery{CommandID: r.Context.CommandID, TenantID: r.Context.TenantID, UserID: r.Context.UserID, ActorID: r.Context.ActorID, ActorKind: authorization.SubjectServiceAccount, OperationID: operation(name).OperationID, RecordID: record}
-	caller := authorization.DecisionContext{PolicyRevision: authorization.Revision(s.config().Coordinator.QueryPolicy.PolicyVersion), Request: authorization.Request{Subject: authorization.Subject{ID: authorization.SubjectID(q.ActorID), Kind: q.ActorKind}, Tenant: authorization.TenantID(q.TenantID), Action: authorization.Action(q.OperationID), Resource: authorization.Resource{Type: "identity.user", ID: authorization.ResourceID(q.UserID)}}}
+	q := identity.RecoveryQuery{CommandID: r.Context.CommandID, TenantID: r.Context.TenantID, UserID: r.Context.UserID, AnonymousFlowID: r.Context.AnonymousFlowID, ActorID: r.Context.ActorID, ActorKind: authorization.SubjectServiceAccount, OperationID: operation(name).OperationID, RecordID: record}
+	subject := string(q.UserID)
+	resourceType := authorization.ResourceType("identity.user")
+	if q.AnonymousFlowID != "" {
+		subject = q.AnonymousFlowID
+		resourceType = "identity.anonymous-flow"
+	}
+	caller := authorization.DecisionContext{PolicyRevision: authorization.Revision(s.config().Coordinator.QueryPolicy.PolicyVersion), Request: authorization.Request{Subject: authorization.Subject{ID: authorization.SubjectID(q.ActorID), Kind: q.ActorKind}, Tenant: authorization.TenantID(q.TenantID), Action: authorization.Action(q.OperationID), Resource: authorization.Resource{Type: resourceType, ID: authorization.ResourceID(subject)}}}
 	out, e := c.RecoverCommand(ctx, q, caller)
 	// The public kernel deliberately withholds its CommandRecord on an
 	// uncertain reconciliation COMMIT and returns typed UnknownCommitError.
