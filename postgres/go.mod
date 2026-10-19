@@ -13,6 +13,21 @@ require (
 	github.com/faustbrian/go-postgres v1.1.1-0.20260912090843-61261695bcc7
 	github.com/faustbrian/go-transactional-outbox/postgres/identity v0.0.0-20261015133445-5c139522d060
 	github.com/faustbrian/go-transactional-outbox/v2 v2.0.2-0.20261015062550-37ea15436ae9
-	github.com/faustbrian/go-webauthn v0.0.0-20260924114017-630c7e5e45c5
+	github.com/faustbrian/go-webauthn v0.0.0-20261019011801-531225ae8a14
 	github.com/jackc/pgx/v5 v5.11.0
+)
+
+require (
+	github.com/faustbrian/go-authentication/v2 v2.0.2-0.20261015052822-d9f5132c7f68 // indirect
+	github.com/faustbrian/go-capability/v2 v2.0.2-0.20261015044219-caab644d2fec // indirect
+	github.com/faustbrian/go-identifier/v2 v2.0.3-0.20261015083104-9892f17723c0 // indirect
+	github.com/faustbrian/go-migrations/v2 v2.0.0 // indirect
+	github.com/faustbrian/go-password/v2 v2.0.2-0.20261015050515-4eb0fefa60ff // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	golang.org/x/crypto v0.57.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 )

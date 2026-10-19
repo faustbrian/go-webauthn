@@ -13,8 +13,8 @@ single-use challenges, typed `credProps`/`credProtect`, backup flags and counter
 policy. Unsupported variants fail closed. Source identity, precise bounds and
 authority distinctions are in [protocol sources](docs/protocol-sources.md).
 
-The [documentation map](docs/index.md) retains the original planning and
-security boundaries; this README describes the selected implementation.
+The [documentation map](docs/index.md) links the retained complete goal and
+the selected implementation's security boundaries.
 
 ## Public flow
 
@@ -75,7 +75,9 @@ the complete retained goals, not silently removed obligations.
 Consumer fixtures cover the selected real-PostgreSQL ceremony, failure,
 concurrency and recovery paths, including actual Chromium output checked by
 pinned WPT helpers and WebCrypto. This is not the full WPT suite. The candidate
-still requires independent final review and clean-consumer/public-pin proof.
+has independent final source review. The native adapter's selected public
+protocol-library pin passes real PostgreSQL/race and actual Chrome/WPT consumer
+checks; native adapter publication remains pending.
 Whole-unit qualification additionally retains the full original goal's coverage,
 mutation, security, compatibility, lifecycle and release obligations. A local
 test or source pin is not a release, full M15 acceptance or production claim.

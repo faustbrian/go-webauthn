@@ -173,7 +173,7 @@
         "maturity": "experimental",
         "construction_styles": ["new-config"],
         "lifecycle_styles": ["stateless"],
-        "ownership": {"configuration":"caller","mutable_inputs":["copy","borrow"],"runtime_resources":"caller","background_work":"none"},
+        "ownership": {"configuration":"caller","mutable_inputs":["borrow","copy"],"runtime_resources":"caller","background_work":"none"},
         "optional_owned_dependencies": [],
         "adapters": [],
         "companions": [],

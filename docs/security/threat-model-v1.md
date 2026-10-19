@@ -1,12 +1,15 @@
 # WebAuthn threat model, version 1
 
 [Documentation map](../index.md) · [Repository README](../../README.md)
-[Next: Goal: planned go-webauthn boundary](../goal.md)
+[Next: Retained complete goal](../goal.md)
 
-Status: planning baseline, 2026-09-24. Scope: the proposed root module of
-`github.com/faustbrian/go-webauthn`. There is no source package, supported
-version, or runtime security control. This model must be revised when concrete
-API, protocol profile, storage boundary, or implementation evidence exists.
+Status: experimental selected profile, 2026-10-19. Scope: the root protocol
+library and independent PostgreSQL adapter. The implemented profile is
+identified-user registration/assertion with ES256, `none` attestation, mandatory
+UP/UV, exact tenant/RP/origin binding and typed `credProps`/`credProtect`.
+Complete protocol, identity/session integration and release qualification remain
+unfinished. See [protocol sources and explicit exclusions](../protocol-sources.md)
+for the selected specification decisions and bounds.
 
 ## Assets, actors, and boundaries
 
@@ -14,7 +17,7 @@ The assets are authentication decisions, challenge and ceremony state,
 credential public keys and identifiers, opaque user handles, relying-party
 identity, origin and top-origin policy, attestation trust decisions,
 authenticator counters and backup flags, and sensitive operational metadata.
-Credential private keys must not cross into the proposed verifier; their
+Credential private keys must not cross into the verifier; their
 device or synced-provider lifecycle is outside this module. Any service
 credential used to fetch metadata belongs to the caller or an explicit future
 adapter.
@@ -28,31 +31,36 @@ separate trust scenario. The application, storage provider, trusted clock,
 configured relying-party policy, and transport are not assumed correct merely
 because a verifier accepts a response.
 
-| Boundary | Planned owner and required decision |
+| Boundary | Owner and required decision |
 | --- | --- |
 | Browser or transport to parser | Module must bound bytes, nesting, collection counts, decoding, and allocation before parsing; reject ambiguous, malformed, and trailing data. Caller owns request body limits and HTTPS/proxy policy. |
 | Parsed client and authenticator data to verifier | Module must bind ceremony type, challenge, origin and top origin where applicable, relying-party ID hash, user-presence and user-verification policy, credential ID, algorithm, signature, and extension semantics. Every required check must fail closed. |
-| Verifier to ceremony and credential store | Caller owns durable state, tenant/account binding, expiry, atomic single-use challenge consumption, credential uniqueness, and transactional counter/backup-state updates. An eventual callback contract must make those obligations explicit. |
-| Attestation and metadata | Module must make attestation policy and trust anchors explicit. Optional remote metadata acquisition must be caller-controlled and bounded for URL, DNS, redirects, proxy, response size, freshness, and timeouts; no implicit network access. |
+| Verifier to ceremony and credential store | The root owns protocol verification and opaque verification custody. The native PostgreSQL adapter owns digest-only challenges, tenant/account binding, expiry, atomic single-use consumption, credential uniqueness and counter/backup-state CAS through the public identity coordinator. The caller owns pool and migration lifetime and authorizes the identified subject before beginning a ceremony. No private transaction engine or bearer-to-user lookup is provided. |
+| Attestation and metadata | The selected profile accepts only `none` attestation and no remote metadata or trust-anchor fetch. Trusted attestation remains unsupported. Any future remote adapter must make trust policy, URL/DNS/redirect/proxy controls, response limits, freshness and timeouts explicit. |
 | Verification result to application | Caller owns account lookup, authorization, session issuance, recovery, fallback, and rate limits. A successful WebAuthn assertion alone cannot authorize an application action. |
 | Diagnostics and release pipeline | Module must avoid sensitive data in errors, logs, traces, metrics, panics, fixtures, and CI artifacts. Maintainers own dependency, action, artifact, and release integrity. |
 
-The planned core has no filesystem, database, queue, cache, process,
-environment, plugin, or background-worker access. If a future design adds one,
-this model and its ownership and abuse cases must be revised before release.
+The protocol core has no filesystem, database, queue, cache, process,
+environment, plugin or background-worker access. Its store is explicit and
+borrowed; the independently selected PostgreSQL adapter borrows the caller's
+primary pool. Neither module starts a worker or owns an application session.
 
-## Unresolved risks and release evidence
+## Risks and remaining release evidence
 
-No runtime risk is accepted: no runtime exists. Every row is a release blocker,
-not a claim that a mitigation has been implemented. The module maintainer owns
-the proposed verifier and parser contracts; the adopting application owns the
-caller-side responsibilities. A risk can be accepted only in a later, explicit
-record naming its owner, rationale, mitigation, and review condition.
+The table retains the complete goal's risk obligations; it is not a claim of
+complete mitigation or a waiver based on selected-profile tests. The root and
+native adapter have focused protocol, real-persistence, concurrency, failure
+and recovery tests and independent source review. Its selected public-root pin
+also passes actual Chrome/WPT and PostgreSQL consumer checks; publication of the
+native adapter remains pending. The module
+maintainer owns verifier/parser and native persistence contracts; the adopting
+application owns authorization, transport and session policy. An unsupported
+variant must fail closed, not inherit assurance from the selected profile.
 
 | Risk and attacker outcome | Required mitigation and executable evidence | Owner / review condition |
 | --- | --- | --- |
 | Origin, relying-party, cross-origin, or ceremony confusion authenticates the wrong site or operation | Pin a documented WebAuthn specification profile; fail closed on origin/top-origin and RP ID hash mismatch, ceremony type, challenge mismatch, and policy-required flags; exercise malformed and cross-site vectors plus independent conformance fixtures. | Module maintainer; review at API design and each protocol-profile change. Caller must configure trusted RP/origin policy. |
-| Replayed, expired, duplicated, reordered, or concurrently consumed challenges authenticate twice | Define unpredictable challenge generation and caller-owned storage with tenant/account binding, deadline, atomic consumption, and race semantics; test replay, expiry, cross-account use, concurrent assertions, and partial store failure. | Caller for persistence, module maintainer for contract; review before integration and on store changes. |
+| Replayed, expired, duplicated, reordered, or concurrently consumed challenges authenticate twice | Use unpredictable challenges and explicit storage with tenant/account binding, deadline, atomic consumption and race semantics; test replay, expiry, cross-account use, concurrent assertions and partial store failure. | Native adapter maintainer for persistence, root maintainer for contract; caller for an alternative store. Review on store changes. |
 | Signature, algorithm, key, attestation, or extension confusion bypasses verification | Require standard maintained cryptographic primitives, strict COSE algorithm/key matching, signature coverage, attestation format and trust-policy decisions, and rejection of unsupported critical extensions; test negative vectors and interoperable positive fixtures. | Module maintainer; review on algorithm, attestation, or extension additions. |
 | Unbounded JSON, CBOR, base64url, certificate chains, metadata, or nested references exhaust resources or create parser differentials | Set explicit limits for input bytes, depth, count, decoded size, chain length, concurrency, and time; reject duplicate or ambiguous fields; seed hostile-input tests and bounded fuzzing from the selected specification. | Module maintainer, caller for HTTP body limit; review whenever parser or format support changes. |
 | Counter rollback, backup flags, discoverable credentials, or user-handle confusion hides cloning or crosses accounts | Define per-credential state transition policy, counter limitations, account binding, backup-state interpretation, and atomic persistence; test rollback, zero/unsupported counters, backup transitions, and concurrent updates. | Caller for state and account mapping, module maintainer for verification result; review on credential-state changes. |
@@ -62,12 +70,12 @@ record naming its owner, rationale, mitigation, and review condition.
 
 ## Release disposition
 
-Release is blocked. Implementation must first define the supported protocol
-profile and ownership contracts, then produce focused hostile-input,
-fail-closed, replay/concurrency, redaction, cancellation, and conformance
-evidence for the actually implemented boundaries. Relevant static, dependency,
+Release is blocked. The documented selected profile does not close the complete
+goal. Remaining qualification must cover the actually supported hostile-input,
+fail-closed, replay/concurrency, redaction, cancellation and conformance
+boundaries without relabeling unimplemented variants as supported. Relevant
+static, dependency,
 secret, and release-integrity checks are required at the corresponding
 implementation or release boundary. Planning metadata checks cannot satisfy
-those security gates. The public README, manifest, and security policy must
-continue to reflect the absence of a usable verifier until that evidence is
-reviewed.
+those security gates. The public README, manifest and security policy must
+distinguish experimental usable behavior from whole-unit release qualification.
