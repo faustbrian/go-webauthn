@@ -13,6 +13,9 @@ single-use challenges, typed `credProps`/`credProtect`, backup flags and counter
 policy. Unsupported variants fail closed. Source identity, precise bounds and
 authority distinctions are in [protocol sources](docs/protocol-sources.md).
 
+The [documentation map](docs/index.md) retains the original planning and
+security boundaries; this README describes the selected implementation.
+
 ## Public flow
 
 1. An existing trusted identity workflow authorizes enrollment/use and selects
@@ -77,6 +80,42 @@ Whole-unit qualification additionally retains the full original goal's coverage,
 mutation, security, compatibility, lifecycle and release obligations. A local
 test or source pin is not a release, full M15 acceptance or production claim.
 
-See [SECURITY.md](SECURITY.md) and the
-[versioned threat model](docs/security/threat-model-v1.md). MIT applies to owned
-code; the embedded unmodified PSL retains its MPL 2.0 notice.
+Use the checksum-verified public `golib` release declared in `.golib.yaml`,
+with Go 1.27.2 as the verification producer. Both modules retain Go 1.27.0
+as their minimum. The [historical repository goal](docs/goal.md) is not a
+runtime or release qualification claim.
+An ordinary standalone checkout is sufficient, without sibling repositories,
+goal ledgers or building Tools from source:
+
+```sh
+make check
+make ci
+```
+
+Both routes, and the `make fast-check` alias, check configuration, repository
+structure, cohesion, offline specification decisions, local documentation links
+and unconditional whole-tree secrets. They run no application tests, mutation
+campaigns or release checks. Hosted Required applies the same structural checks
+and scans committed changed content against the exact validated PR base or push
+before commit, without a fallback base or a duplicate full-history scan.
+Missing or invalid change identities and failed checks remain failures.
+
+`make check-full` optionally preserves the previous full manifest-selected
+contract, including broad spelling and external-link documentation assurance.
+It is not an ordinary CI prerequisite and does not establish runtime or release
+qualification for the experimental implementation.
+
+`make check-online` explicitly adds authoritative specification refresh to the
+local contract. Scheduled and manual CI also refresh those authorities online
+and run whole-tree secrets. Passing any of these planning routes is not runtime
+security or release qualification.
+
+See the versioned [Golib ecosystem index](https://github.com/faustbrian/go-library-tools/blob/v1.8.4/docs/ecosystem/README.md)
+and [package-family guidance](https://github.com/faustbrian/go-library-tools/blob/v1.8.4/docs/ecosystem/design-language.md#package-families-and-selection)
+for the shared design language.
+
+## License
+
+MIT. See [LICENSE](LICENSE), [SECURITY.md](SECURITY.md) and the
+[versioned threat model](docs/security/threat-model-v1.md). The embedded
+unmodified PSL retains its MPL 2.0 notice.

@@ -8,6 +8,9 @@ release. See the current [adoption boundary](../README.md) and
 [selected protocol sources](protocol-sources.md). The historical acceptance
 below must not be mistaken for the current implementation or delivery state.
 
+[Documentation map](index.md) · [Repository README](../README.md)
+[Next: WebAuthn threat model, version 1](security/threat-model-v1.md)
+
 Status: planned
 
 The coordination plan identifies `github.com/faustbrian/go-webauthn` as the
@@ -28,7 +31,9 @@ That record contains proposed contracts; it is not implementation evidence.
 - Record the frozen Protocols and Descriptions family, WebAuthn capabilities,
   ownership, and delivery lifecycle in schema-v2 engineering metadata.
 - Validate the metadata locally and in hosted CI with immutable,
-  checksum-verified `go-library-tools` v1.4.0 tooling.
+  checksum-verified public `go-library-tools` v2.1.2 tooling, without building
+  it from source. Keep ordinary structure, specification and links offline,
+  with unconditional secret checks and explicit online authority refresh.
 - Keep the module non-releasable and release blocked until implementation and
   executable evidence address the [versioned WebAuthn threat model](security/threat-model-v1.md).
 - Publish a [private vulnerability reporting process](../SECURITY.md).
