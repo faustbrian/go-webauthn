@@ -1,6 +1,7 @@
 # go-webauthn
 
-**Unqualified implementation candidate; not a released or complete M15 profile.**
+**Selected identified-user none/ES256 consumer profile; whole-unit qualification
+and release remain incomplete.**
 
 The root module owns WebAuthn protocol verification. The independent
 [`postgres`](postgres) module owns real durable ceremony and credential storage
@@ -77,10 +78,15 @@ concurrency and recovery paths, including actual Chromium output checked by
 pinned WPT helpers and WebCrypto. This is not the full WPT suite. The candidate
 has independent final source review. The native adapter's selected public
 protocol-library pin passes real PostgreSQL/race and actual Chrome/WPT consumer
-checks; native adapter publication remains pending.
+checks. The native adapter is available through public module revision
+`v0.0.0-20261019012703-3ad12d242248`; its downloaded source matches the reviewed
+implementation. The focused account-authority consumer additionally proves that
+suspension after challenge issuance denies otherwise-valid registration and
+assertion without consuming either ceremony or changing credential/success
+effects. This is the selected M15 ceremony profile, not passkey/session support.
 Whole-unit qualification additionally retains the full original goal's coverage,
 mutation, security, compatibility, lifecycle and release obligations. A local
-test or source pin is not a release, full M15 acceptance or production claim.
+test or source pin is not a release, whole-unit conformance or production claim.
 
 Use the checksum-verified public `golib` release declared in `.golib.yaml`,
 with Go 1.27.2 as the verification producer. Both modules retain Go 1.27.0

@@ -1,7 +1,7 @@
 # Selected protocol and source identity
 
-This is a finite **unqualified candidate**, not complete M15 or whole-unit
-conformance. The supported algorithm/attestation combination is ES256 with
+This is a finite **selected M15 consumer profile**, not whole-unit
+conformance or a release. The supported algorithm/attestation combination is ES256 with
 `none`; unsupported profiles fail closed. Other algorithms, trusted attestation,
 metadata, discoverable authentication, sessions, passkeys and reference/HTTP
 composition remain later scope under the complete retained goals.

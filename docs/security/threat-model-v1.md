@@ -51,8 +51,11 @@ The table retains the complete goal's risk obligations; it is not a claim of
 complete mitigation or a waiver based on selected-profile tests. The root and
 native adapter have focused protocol, real-persistence, concurrency, failure
 and recovery tests and independent source review. Its selected public-root pin
-also passes actual Chrome/WPT and PostgreSQL consumer checks; publication of the
-native adapter remains pending. The module
+also passes actual Chrome/WPT and PostgreSQL consumer checks. Public native
+revision `v0.0.0-20261019012703-3ad12d242248` matches that reviewed source.
+A focused PostgreSQL consumer proves that actual subject suspension after
+issuance denies valid registration/assertion without partial success effects.
+This selected-profile evidence does not establish whole-unit qualification. The module
 maintainer owns verifier/parser and native persistence contracts; the adopting
 application owns authorization, transport and session policy. An unsupported
 variant must fail closed, not inherit assurance from the selected profile.
