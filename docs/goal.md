@@ -1,4 +1,12 @@
-# Goal: planned go-webauthn boundary
+# Historical goal: planned go-webauthn boundary
+
+This planning-only checkpoint is retained as history. The separately activated
+complete identity-platform goal now authorizes implementation. The documented
+none/ES256 root and PostgreSQL ceremony profile is an experimental implementation;
+it is not full WebAuthn conformance, whole-unit qualification or a published
+release. See the current [adoption boundary](../README.md) and
+[selected protocol sources](protocol-sources.md). The historical acceptance
+below must not be mistaken for the current implementation or delivery state.
 
 Status: planned
 

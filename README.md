@@ -1,70 +1,82 @@
 # go-webauthn
 
-> **Status: planned.** This repository does not currently provide an
-> installable package, a released version, or a runtime API. The module is
-> non-releasable; release is blocked pending implementation and executable
-> security evidence.
+**Unqualified implementation candidate; not a released or complete M15 profile.**
 
-`go-webauthn` reserves the planned Golib boundary for WebAuthn registration
-and authentication ceremonies, relying-party and origin policy, challenge
-policy, attestation and assertion verification, authenticator metadata,
-counters, and security-key profiles. The plan keeps those concepts separate
-from identity orchestration, passkey experiences, persistence adapters,
-browser interfaces, and sessions.
+The root module owns WebAuthn protocol verification. The independent
+[`postgres`](postgres) module owns real durable ceremony and credential storage
+through the existing identity coordinator. Neither owns identity enrollment
+authorization, sessions, passkey workflows, browser UI or HTTP routes.
 
-## Planned responsibility
+The candidate selects identified-user ES256, `none` attestation, exact tenant/
+RP/origin binding, mandatory UP/UV, 32-byte opaque user handles, five-minute
+single-use challenges, typed `credProps`/`credProtect`, backup flags and counter
+policy. Unsupported variants fail closed. Source identity, precise bounds and
+authority distinctions are in [protocol sources](docs/protocol-sources.md).
 
-The future root package is intended to own WebAuthn ceremony and verification
-contracts, bounded browser-protocol parsing, relying-party policy,
-authenticator state transitions, and caller-supplied storage coordination. Its
-contracts remain proposals until they are implemented, reviewed, verified,
-and released.
+## Public flow
 
-## Non-goals
+1. An existing trusted identity workflow authorizes enrollment/use and selects
+   tenant before looking up RP configuration. `CeremonyContext` is correlation,
+   not authentication or authorization proof.
+2. Construct the concrete native store with the primary pool and public
+   coordinator policy, then construct `webauthn.New` with that store, fixed
+   tenant/RP/version/origins, explicit timeout and an opaque
+   `NewChallengeDigestKey` value. The service copies mutable configuration.
+3. `BeginRegistration` commits a digest-only ceremony before returning browser
+   options. `TransferJSON` reveals the challenge once to a synchronous delivery
+   callback outside SQL. A retry returns original safe ceremony metadata but
+   cannot re-reveal its challenge.
+4. `VerifyRegistration` accepts bounded browser JSON, verifies the selected
+   protocol, then atomically consumes the ceremony and inserts one credential.
+   Only successful finalization produces an opaque `VerifiedRegistration`.
+5. `BeginAssertion` selects the identified subject and nonempty credential
+   allowlist. `VerifyAssertion` verifies exact client-data bytes and signature,
+   then atomically consumes the ceremony and updates counter/backup/version
+   before returning an opaque `VerifiedAssertion`.
 
-The planned root boundary does not own:
+Every operation uses its own random `identity.NewCommandID`. Preserve that ID
+and complete original input across retries. An unknown acknowledgement returns
+no challenge or verified evidence; `Recover` uses that original command and
+scope. A committed replay returns typed `Replay`, not renewed authentication.
+Recovery reports only historical outcome and cannot recreate challenge bytes.
 
-- identity signup, sign-in, account, or session orchestration;
-- passkey user experiences or browser JavaScript;
-- database clients, migrations, transactions, or persistence adapters; or
-- application authorization policy, caches, or background workers.
+The concrete public-path walkthrough is
+[the PostgreSQL consumer test](postgres/ceremony_integration_test.go). It is not
+evidence of signup, sessions, HTTP integration or complete browser conformance.
 
-Those concerns may become separate modules or compose existing Golib packages.
-Their presence in planning material does not make them available here.
+## Ownership and operations
 
-## Lifecycle and ownership
+The caller owns pool lifetime, migration execution, bounded authorization policy,
+the challenge-digest key and any explicit copies made during delivery. The
+library owns no background goroutine or global user authority. Never log or
+snapshot challenge-bearing browser options, raw responses, handles or credentials.
+`Challenge.Discard` invalidates every unrevealed alias; ordinary diagnostics
+cannot inspect its closure-backed custody, including enclosing wrappers.
 
-Implementation, hardening, and release have not started. The current module
-declaration exists only so repository tooling can validate the planned module
-identity, family, ownership, and lifecycle metadata.
+Install the public identity kernel, audit and outbox histories, then
+`postgres.MigrationSource` through the existing migration owner. The native
+adapter never opens a private domain transaction. Current active-subject,
+expiry and optimistic checks remain under the sole coordinator transaction,
+including its final check after audit/lifecycle persistence.
+A reserved command that is denied or rolled back can retain its separate
+original no-change failure audit; it cannot retain a partial success mutation
+or lifecycle effect.
 
-The plan requires caller-owned configuration and runtime resources, copied
-mutable inputs, context-bounded external operations, and no package-owned
-background work. These are design constraints, not claims about released
-behavior.
+Current exclusions include discoverable/usernameless flows, shared RP tenancy,
+Ed25519/RSA, trusted attestation/metadata, credential management, key rotation,
+passkeys, sessions and reference/HTTP composition. They remain requirements of
+the complete retained goals, not silently removed obligations.
 
-The versioned [WebAuthn threat model](docs/security/threat-model-v1.md)
-identifies the trust boundaries and security evidence required before release.
-See [SECURITY.md](SECURITY.md) to report a suspected vulnerability privately.
-Neither document establishes a runtime security control.
+## Verification and release
 
-## Planning and verification
+Consumer fixtures cover the selected real-PostgreSQL ceremony, failure,
+concurrency and recovery paths, including actual Chromium output checked by
+pinned WPT helpers and WebCrypto. This is not the full WPT suite. The candidate
+still requires independent final review and clean-consumer/public-pin proof.
+Whole-unit qualification additionally retains the full original goal's coverage,
+mutation, security, compatibility, lifecycle and release obligations. A local
+test or source pin is not a release, full M15 acceptance or production claim.
 
-The [repository goal](docs/goal.md) and `modules.json` record the planning scope
-and schema-v2 engineering inventory. Planned lifecycle state excludes this
-module from installable and released consumer catalogs. The local
-`make cohesion` target validates that boundary with the exact checksum-pinned
-`go-library-tools` v1.4.0 release declared in `.golib.yaml`.
-
-Passing repository checks proves only that the planning scaffold and metadata
-are internally consistent. It does not prove WebAuthn behavior, protocol
-conformance, security, or an API. Release requires a separately authorized
-implementation and focused executable evidence for the threat-model boundaries.
-
-See the versioned [Golib ecosystem index](https://github.com/faustbrian/go-library-tools/blob/v1.4.0/docs/ecosystem/README.md)
-and [package-family guidance](https://github.com/faustbrian/go-library-tools/blob/v1.4.0/docs/ecosystem/design-language.md#package-families-and-selection)
-for the shared design language.
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+See [SECURITY.md](SECURITY.md) and the
+[versioned threat model](docs/security/threat-model-v1.md). MIT applies to owned
+code; the embedded unmodified PSL retains its MPL 2.0 notice.

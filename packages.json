@@ -5,14 +5,15 @@
     {
       "module_directory": ".",
       "directory": ".",
-      "name": "planned",
+      "name": "webauthn",
       "import_path": "github.com/faustbrian/go-webauthn",
-      "kind": "planned entry point",
-      "production": false,
-      "executable": false,
-      "coverage_required": false,
-      "build_required": false,
+      "kind": "public",
+      "production": true,
+      "executable": true,
+      "coverage_required": true,
+      "build_required": true,
       "build_tags": []
-    }
+    },
+    {"module_directory":"postgres","directory":".","name":"postgres","import_path":"github.com/faustbrian/go-webauthn/postgres","kind":"public","production":true,"executable":true,"coverage_required":true,"build_required":true,"build_tags":[]}
   ]
 }
