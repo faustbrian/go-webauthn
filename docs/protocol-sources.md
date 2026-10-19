@@ -1,10 +1,12 @@
 # Selected protocol and source identity
 
-This is a finite **selected M15 consumer profile**, not whole-unit
+These are finite **selected ceremony profiles**, not whole-unit
 conformance or a release. The supported algorithm/attestation combination is ES256 with
 `none`; unsupported profiles fail closed. Other algorithms, trusted attestation,
-metadata, discoverable authentication, sessions, passkeys and reference/HTTP
+metadata, sessions, passkey orchestration and reference/HTTP
 composition remain later scope under the complete retained goals.
+The discoverable profile is a native prerequisite for later passkey integration,
+not closure of M16's signup, session and management journeys.
 
 | Source | Immutable identity | SHA-256 |
 | --- | --- | --- |
@@ -53,9 +55,15 @@ No private transaction or substitute command authority is introduced.
   IDs and user handles have RP-wide database uniqueness. This profile rejects
   sharing one RP across tenants rather than inventing a cross-tenant mapping.
 - The exact configured origin, RP/configuration version, purpose and subject
+  (or explicit pre-auth flow for usernameless assertions)
   are frozen into the ceremony. `crossOrigin=true` and any `topOrigin` member
   deny. Only the explicit exact `http://localhost:<port>` development exception
   is supported; production configuration keeps it disabled.
+- Resident-required registration and assertions without an allowlist follow
+  the same pinned WebAuthn §5.4.4/§7.2 profile. The returned 32-byte handle must
+  resolve the exact credential/subject mapping; signature verification and
+  current active-subject checks precede committed verification. Unsigned
+  `credProps` and `none` attestation do not prove physical key residency.
 - UP and UV are mandatory. BE is immutable and BS without BE denies.
   Backup-eligible counters retain the maximum and expose bounded counter risk
   for zero/equal/decreasing values. A positive non-backup counter that fails

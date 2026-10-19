@@ -21,7 +21,7 @@
           "build_tags": []
         }
       ],
-      "purpose": "Experimental identified-user WebAuthn none/ES256 protocol ceremonies with explicit RP/origin policy, bounded parsing and opaque verification custody; complete protocol and release qualification remain in development.",
+      "purpose": "Experimental identified-user and discoverable WebAuthn none/ES256 protocol ceremonies with explicit RP/origin policy, bounded parsing and opaque verification custody; complete protocol and release qualification remain in development.",
       "lifecycle": "experimental",
       "kind": "public library",
       "releasable": true,

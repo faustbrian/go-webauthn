@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add optional resident-required registration and usernameless assertions for
+  existing active users, with mandatory RP-wide credential/handle matching,
+  original pre-auth flow binding and atomic credential finalization. Existing
+  identified APIs remain supported; this does not provide signup or sessions.
+
 - Add an unqualified, identified-user WebAuthn none/ES256 ceremony candidate
   with exact tenant/RP/origin policy, opaque reveal-once challenge custody,
   selected typed extensions and durable PostgreSQL credential transitions.

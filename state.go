@@ -203,7 +203,11 @@ func (o *optionsState) transfer(ctx context.Context, deliver func(context.Contex
 			options["user"] = map[string]string{"id": h, "name": h, "displayName": h}
 			options["pubKeyCredParams"] = []map[string]any{{"type": "public-key", "alg": -7}}
 			options["attestation"] = "none"
-			options["authenticatorSelection"] = map[string]any{"userVerification": "required", "residentKey": "discouraged"}
+			resident := "discouraged"
+			if o.record.Intent.ResidentKeyRequired {
+				resident = "required"
+			}
+			options["authenticatorSelection"] = map[string]any{"userVerification": "required", "residentKey": resident, "requireResidentKey": o.record.Intent.ResidentKeyRequired}
 			exclude := make([]map[string]string, len(o.record.Intent.AllowedCredentials))
 			for i, id := range o.record.Intent.AllowedCredentials {
 				exclude[i] = map[string]string{"type": "public-key", "id": base64.RawURLEncoding.EncodeToString(id)}
@@ -215,7 +219,9 @@ func (o *optionsState) transfer(ctx context.Context, deliver func(context.Contex
 			for i, id := range o.record.Intent.AllowedCredentials {
 				allow[i] = map[string]string{"type": "public-key", "id": base64.RawURLEncoding.EncodeToString(id)}
 			}
-			options["allowCredentials"] = allow
+			if o.record.Intent.Kind != "get-discoverable" {
+				options["allowCredentials"] = allow
+			}
 		}
 		ext := map[string]any{}
 		// WebAuthn CR20260526 §10.4 and CTAP2.1 §12.1 define these inputs
@@ -248,6 +254,14 @@ func challengeDigest(key [32]byte, r CeremonyRecord, challenge []byte) [32]byte 
 		binary.BigEndian.PutUint64(n[:], uint64(len(v)))
 		_, _ = h.Write(n[:])
 		_, _ = h.Write([]byte(v))
+	}
+	// Preserve identified challenge digests. Anonymous ceremonies additionally
+	// bind their pre-auth transaction; no subject is known until verification.
+	if r.Intent.Context.AnonymousFlowID != "" {
+		var size [8]byte
+		binary.BigEndian.PutUint64(size[:], uint64(len(r.Intent.Context.AnonymousFlowID)))
+		_, _ = h.Write(size[:])
+		_, _ = h.Write([]byte(r.Intent.Context.AnonymousFlowID))
 	}
 	var n [8]byte
 	binary.BigEndian.PutUint64(n[:], r.Intent.RPVersion)

@@ -1,6 +1,6 @@
 # go-webauthn
 
-**Selected identified-user none/ES256 consumer profile; whole-unit qualification
+**Selected identified-user and discoverable none/ES256 profiles; whole-unit qualification
 and release remain incomplete.**
 
 The root module owns WebAuthn protocol verification. The independent
@@ -8,7 +8,7 @@ The root module owns WebAuthn protocol verification. The independent
 through the existing identity coordinator. Neither owns identity enrollment
 authorization, sessions, passkey workflows, browser UI or HTTP routes.
 
-The candidate selects identified-user ES256, `none` attestation, exact tenant/
+The candidate selects ES256, `none` attestation, exact tenant/
 RP/origin binding, mandatory UP/UV, 32-byte opaque user handles, five-minute
 single-use challenges, typed `credProps`/`credProtect`, backup flags and counter
 policy. Unsupported variants fail closed. Source identity, precise bounds and
@@ -38,6 +38,34 @@ the selected implementation's security boundaries.
    then atomically consumes the ceremony and updates counter/backup/version
    before returning an opaque `VerifiedAssertion`.
 
+### Discoverable credentials
+
+For existing active users, set `BeginRegistrationRequest.ResidentKeyRequired`
+to request resident-required creation with UV. The default remains the existing
+nonresident-discouraged profile. `none` attestation and unsigned `credProps`
+cannot prove physical residency or device provenance.
+
+Construct `NewDiscoverable` with a `DiscoverableStore`. Native support requires
+an adapter revision implementing this seam and forward migration 2; older adapter
+revisions remain identified-only and are rejected by `NewDiscoverable`.
+`BeginDiscoverableAssertion` takes a trusted `CeremonyContext` with empty
+`UserID` and a bounded `AnonymousFlowID`, never a browser-selected account.
+It emits no credential allowlist or user handle. Retain that original pre-auth
+flow, tenant, actor and ceremony for `VerifyDiscoverableAssertion`; supply a new
+completion command ID. The signed response must contain a matching 32-byte
+handle. Resolution binds RP, credential ID and RP-wide handle mapping to one
+tenant/user; the final transaction checks that user is currently active and
+atomically consumes the original ceremony and updates counter/backup/version.
+The returned `VerifiedAssertion.Credential()` identifies the resolved subject;
+its `Context()` retains the anonymous command, not a fabricated authenticated user.
+
+Use `BeginDiscoverableAssertionOperation` or `DiscoverableAssertionOperation`
+for exact original-command recovery. Neither replay nor recovery issues fresh
+verification. The [option contract tests](discoverable_test.go) preserve resident
+selection, UV and usernameless option shape. The optional store must finalize
+this protocol path durably before any verified result can be issued.
+Signup, session issuance, credential management and conditional UI are excluded.
+
 Every operation uses its own random `identity.NewCommandID`. Preserve that ID
 and complete original input across retries. An unknown acknowledgement returns
 no challenge or verified evidence; `Recover` uses that original command and
@@ -58,7 +86,9 @@ snapshot challenge-bearing browser options, raw responses, handles or credential
 cannot inspect its closure-backed custody, including enclosing wrappers.
 
 Install the public identity kernel, audit and outbox histories, then
-`postgres.MigrationSource` through the existing migration owner. The native
+`postgres.MigrationSource` through the existing migration owner. Discoverable
+support requires forward migration 2 before new binaries run; identified rows
+remain compatible and old binaries cannot select anonymous rows. The native
 adapter never opens a private domain transaction. Current active-subject,
 expiry and optimistic checks remain under the sole coordinator transaction,
 including its final check after audit/lifecycle persistence.
@@ -66,7 +96,7 @@ A reserved command that is denied or rolled back can retain its separate
 original no-change failure audit; it cannot retain a partial success mutation
 or lifecycle effect.
 
-Current exclusions include discoverable/usernameless flows, shared RP tenancy,
+Current exclusions include shared RP tenancy,
 Ed25519/RSA, trusted attestation/metadata, credential management, key rotation,
 passkeys, sessions and reference/HTTP composition. They remain requirements of
 the complete retained goals, not silently removed obligations.
@@ -76,7 +106,7 @@ the complete retained goals, not silently removed obligations.
 Consumer fixtures cover the selected real-PostgreSQL ceremony, failure,
 concurrency and recovery paths, including actual Chromium output checked by
 pinned WPT helpers and WebCrypto. This is not the full WPT suite. The candidate
-has independent final source review. The native adapter's selected public
+has independent final source review for its retained identified profile. The native adapter's selected public
 protocol-library pin passes real PostgreSQL/race and actual Chrome/WPT consumer
 checks. The native adapter is available through public module revision
 `v0.0.0-20261019012703-3ad12d242248`; its downloaded source matches the reviewed

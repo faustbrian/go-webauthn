@@ -94,7 +94,7 @@ func FuzzBoundedCBOR(f *testing.F) {
 	})
 }
 func FuzzBoundedJSON(f *testing.F) {
-	for _, seed := range []string{`{}`, `{"x":1,"x":2}`, `{"x":[[]]}`, `null`} {
+	for _, seed := range []string{`{}`, `{"x":1,"x":2}`, `{"x":[[]]}`, `null`, `{"response":{"userHandle":null}}`, `{"response":{"userHandle":"AA","userHandle":"AQ"}}`, `{"response":{"userHandle":[]}}`} {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, b string) {

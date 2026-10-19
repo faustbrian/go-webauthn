@@ -46,11 +46,14 @@ func (UnknownCommit) Error() string { return "webauthn: command outcome unknown"
 // forwarded headers or a browser body. It is not proof of identity or a session.
 // Use a fresh identity.NewCommandID for each operation and retain it on retries.
 type CeremonyContext struct {
-	CommandID     identity.CommandID
-	TenantID      identity.TenantID
-	UserID        identity.UserID
-	ActorID       identity.ActorID
-	CorrelationID string
+	CommandID identity.CommandID
+	TenantID  identity.TenantID
+	UserID    identity.UserID
+	// AnonymousFlowID selects a trusted pre-authentication transaction only for
+	// discoverable assertions. It is mutually exclusive with UserID.
+	AnonymousFlowID string `json:",omitempty"`
+	ActorID         identity.ActorID
+	CorrelationID   string
 }
 
 func (CeremonyContext) Format(s fmt.State, _ rune) { redact(s) }
@@ -161,12 +164,15 @@ type CeremonyIntent struct {
 	UserHandle         []byte
 	AllowedCredentials [][]byte
 	Extensions         ExtensionRequestSet
+	// ResidentKeyRequired selects resident-required creation, never a claim
+	// that an unsigned browser extension proves authenticator residency.
+	ResidentKeyRequired bool `json:",omitempty"`
 }
 
 func (CeremonyIntent) Format(s fmt.State, _ rune) { redact(s) }
 
 // CeremonyRecord contains only a scoped keyed challenge digest at rest. Versions
-// start at 1. Store queries are scoped by tenant/RP/subject/ceremony together.
+// start at 1. Store queries bind tenant/RP/ceremony and subject or pre-auth flow.
 type CeremonyRecord struct {
 	Intent          CeremonyIntent
 	ID              string
@@ -214,7 +220,7 @@ type Credential struct {
 
 func (Credential) Format(s fmt.State, _ rune) { redact(s) }
 
-// Lookup always carries exact trusted tenant/subject/RP and ceremony identity.
+// Lookup carries exact trusted tenant/RP/ceremony and subject or pre-auth flow.
 type Lookup struct {
 	Context    CeremonyContext
 	RPID       string
@@ -279,22 +285,55 @@ type Store interface {
 	Recover(context.Context, RecoveryRequest) (identity.CommitOutcome, error)
 }
 
+// DiscoverableStore is the optional durable resolution seam. Lookup must carry
+// an anonymous context and the original ceremony. Resolve exactly RP, credential
+// ID and mandatory handle, scope tenant without disambiguating RP uniqueness,
+// and preserve original pre-transition state for exact retries. FinalizeAssertion
+// must check the resolved active subject inside its atomic commit, consume the
+// anonymous ceremony and CAS-update that same credential and handle mapping.
+type DiscoverableStore interface {
+	Store
+	LoadDiscoverableCredential(context.Context, Lookup, []byte, []byte) (Credential, error)
+}
+
 // BeginRegistrationRequest fixes the opaque 32-byte RP-wide user handle and
 // exact allowed origin. The trusted caller owns prior identity authorization.
+// ResidentKeyRequired opts into resident-required browser creation; false keeps
+// the existing discouraged profile. Neither none attestation nor credProps
+// proves physical residency or authenticator provenance.
 type BeginRegistrationRequest struct {
 	Context             CeremonyContext
 	UserHandle          []byte
 	Origin              string
 	ExcludedCredentials [][]byte
+	ResidentKeyRequired bool
 }
 
 // BeginAssertionRequest selects an existing identified subject and a nonempty
-// allowlist of at most 100 credentials. Discoverable/usernameless is not selected.
+// allowlist of at most 100 credentials. Use DiscoverableService for usernameless.
 type BeginAssertionRequest struct {
 	Context            CeremonyContext
 	UserHandle         []byte
 	Origin             string
 	AllowedCredentials [][]byte
+}
+
+// BeginDiscoverableAssertionRequest requires an empty Context.UserID and a
+// trusted bounded Context.AnonymousFlowID. No user handle or allowlist is known.
+type BeginDiscoverableAssertionRequest struct {
+	Context CeremonyContext
+	Origin  string
+}
+
+// VerifyDiscoverableAssertionRequest retains the exact original pre-auth flow.
+// Credential version is read from primary storage and atomically compared; the
+// browser cannot choose a subject, handle mapping or expected credential version.
+type VerifyDiscoverableAssertionRequest struct {
+	Context         CeremonyContext
+	CeremonyID      string
+	Origin          string
+	Response        []byte
+	ExpectedVersion uint64
 }
 
 // RegistrationOptions contains JSON browser options plus opaque challenge
@@ -340,10 +379,15 @@ const (
 	RegistrationOperation
 	// AssertionOperation recovers original counter/backup update.
 	AssertionOperation
+	// BeginDiscoverableAssertionOperation recovers anonymous ceremony creation.
+	BeginDiscoverableAssertionOperation
+	// DiscoverableAssertionOperation recovers anonymous credential finalization.
+	DiscoverableAssertionOperation
 )
 
-// RecoveryRequest retains exact original command scope. CredentialID is required
-// only for registration/assertion completion. Recovery returns safe historical
+// RecoveryRequest retains exact original command scope, including anonymous flow
+// for discoverable operations. CredentialID is required only for completion.
+// Recovery returns safe historical
 // outcome, never a challenge, Verified result or renewed authentication proof.
 type RecoveryRequest struct {
 	Context      CeremonyContext
@@ -397,6 +441,15 @@ type Service interface {
 	VerifyRegistration(context.Context, VerifyRegistrationRequest) (VerifiedRegistration, error)
 	VerifyAssertion(context.Context, VerifyAssertionRequest) (VerifiedAssertion, error)
 	Recover(context.Context, RecoveryRequest) (identity.CommitOutcome, error)
+}
+
+// DiscoverableService adds resident-required registration/usernameless assertion
+// without changing the identified Service or Store contracts. Results remain
+// protocol facts, not identity enrollment grants, sessions or authorization.
+type DiscoverableService interface {
+	Service
+	BeginDiscoverableAssertion(context.Context, BeginDiscoverableAssertionRequest) (AssertionOptions, error)
+	VerifyDiscoverableAssertion(context.Context, VerifyDiscoverableAssertionRequest) (VerifiedAssertion, error)
 }
 
 func redact(s fmt.State) { _, _ = s.Write([]byte("webauthn(redacted)")) }

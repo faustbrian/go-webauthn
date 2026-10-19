@@ -5,8 +5,10 @@
 
 Status: experimental selected profile, 2026-10-19. Scope: the root protocol
 library and independent PostgreSQL adapter. The implemented profile is
-identified-user registration/assertion with ES256, `none` attestation, mandatory
+identified-user and discoverable registration/assertion with ES256, `none` attestation, mandatory
 UP/UV, exact tenant/RP/origin binding and typed `credProps`/`credProtect`.
+Discoverable assertions bind an anonymous pre-auth flow, then resolve the exact
+RP-wide credential/handle mapping and fence the active subject at atomic commit.
 Complete protocol, identity/session integration and release qualification remain
 unfinished. See [protocol sources and explicit exclusions](../protocol-sources.md)
 for the selected specification decisions and bounds.
