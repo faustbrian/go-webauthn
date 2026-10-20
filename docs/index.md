@@ -14,6 +14,7 @@ not yet constitute complete WebAuthn, passkey or identity/session integration.
 ## Operate and evaluate boundaries
 
 - [WebAuthn threat model, version 1](security/threat-model-v1.md).
+- [Native registration participation](registration-participation.md).
 
 ## Related next steps
 

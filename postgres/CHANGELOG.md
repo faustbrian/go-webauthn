@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add opt-in resident-required ES256 registration participation for the native
+  passkey enrollment owner. Ceremony creation and verified credential insertion
+  can share the parent's existing identity-coordinator Work, proof use and
+  mapping instead of committing separately. Parent-bound native effects retain
+  original-command recovery; failure, replay and unknown acknowledgement do
+  not release challenges or new verification. Existing standalone APIs and
+  installed migration history are unchanged. This is a protocol composition
+  prerequisite, not a complete passkey enrollment or authentication workflow.
+
 - Support the root verifier's opt-in Ed25519 profile through existing atomic
   identified/discoverable credential storage and original-command recovery.
   Algorithm policy is retained in ceremony JSON; existing schema and legacy

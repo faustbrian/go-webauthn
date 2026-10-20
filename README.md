@@ -99,6 +99,21 @@ The concrete public-path walkthrough is
 [the PostgreSQL consumer test](postgres/ceremony_integration_test.go). It is not
 evidence of signup, sessions, HTTP integration or complete browser conformance.
 
+### Native enrollment participation
+
+The PostgreSQL adapter additionally offers invocation-local
+`RegistrationCreation` and `RegistrationFinalization` for the closed native
+passkey enrollment profile. These reuse the real root-produced opaque inputs
+and protocol SQL within the parent's existing coordinator Work; they never
+open an independent domain transaction. The
+[composition contract](docs/registration-participation.md) specifies original
+input binding, creation custody, final checks and historical recovery.
+
+The participant does not supply the parent's fresh authentication, factor/risk
+admission, identity credential insertion, metadata store, or passkey workflow.
+Protocol-participant integration tests therefore do not establish a complete
+passkey consumer. Existing standalone ceremony APIs retain their behavior.
+
 ## Ownership and operations
 
 The caller owns pool lifetime, migration execution, bounded authorization policy,

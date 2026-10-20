@@ -3,7 +3,7 @@
 [Documentation map](../index.md) · [Repository README](../../README.md)
 [Next: Retained complete goal](../goal.md)
 
-Status: experimental selected profile, 2026-10-19. Scope: the root protocol
+Status: experimental selected profile, 2026-10-20. Scope: the root protocol
 library and independent PostgreSQL adapter. The implemented profile is
 identified-user and discoverable registration/assertion with ES256, `none` attestation, mandatory
 UP/UV, exact tenant/RP/origin binding and typed `credProps`/`credProtect`.
@@ -46,6 +46,15 @@ The protocol core has no filesystem, database, queue, cache, process,
 environment, plugin or background-worker access. Its store is explicit and
 borrowed; the independently selected PostgreSQL adapter borrows the caller's
 primary pool. Neither module starts a worker or owns an application session.
+
+The optional [native registration participant](../registration-participation.md)
+allows the selected passkey owner to stage real protocol persistence in its
+existing Work. Original opaque input, command digest and exact synchronous
+parent invocation are required; independent commits are not atomic composition.
+The native parent must propagate errors, fence its own current authority and
+proof use, run final checks, and pass only the actual acknowledged commit
+receipt before releasing any challenge or finalized result. The participant
+does not authenticate a session, supply fresh proof, or qualify a passkey flow.
 
 ## Risks and remaining release evidence
 

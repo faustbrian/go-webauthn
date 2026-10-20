@@ -26,6 +26,9 @@ type phase struct {
 	ceremony      webauthn.CeremonyRecord
 	challenge     webauthn.Challenge
 	applied       bool
+	// Composed registration aliases share reveal/generation state. The owning
+	// native invocation is serial, just like the generation-bound Work itself.
+	participantGenerated, participantReleased bool
 }
 
 var _ kernel.FeatureExecutionContributor = (*phase)(nil)
@@ -252,7 +255,13 @@ func (p *phase) applyAssertion(ctx context.Context, w kernel.Work) error {
 	return nil
 }
 func (p *phase) persistEvidence(ctx context.Context, w kernel.Work) error {
-	b, fp, _, e := w.FeatureCommandIdentity(p)
+	return p.persistEvidenceFor(ctx, w, p)
+}
+
+// The protocol SQL is shared by the standalone owner and explicitly composed
+// registration. The actual invoked parent, never descriptor equality, owns Work.
+func (p *phase) persistEvidenceFor(ctx context.Context, w kernel.Work, owner kernel.FeatureExecutionContributor) error {
+	b, fp, _, e := w.FeatureCommandIdentity(owner)
 	if e != nil || b != p.binding {
 		return identity.InvalidInputError{Field: "webauthn_custody"}
 	}
