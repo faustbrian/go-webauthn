@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Support the root verifier's opt-in Ed25519 profile through existing atomic
+  identified/discoverable credential storage and original-command recovery.
+  Algorithm policy is retained in ceremony JSON; existing schema and legacy
+  ES256 row bytes require no additional migration.
+
 - Add anonymous discoverable ceremony resolution, active-subject fencing and
   atomic challenge/counter/backup updates through the existing coordinator.
   Apply forward migration 2 before new binaries; existing identified records
