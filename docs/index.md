@@ -4,7 +4,7 @@
 
 **Status: experimental implementation; release qualification incomplete.**
 The root protocol library and independent PostgreSQL adapter implement the
-identified-user and discoverable `none`/ES256 profiles described in the README. They do
+identified-user and discoverable `none`/ES256 and opt-in Ed25519 profiles described in the README. They do
 not yet constitute complete WebAuthn, passkey or identity/session integration.
 
 ## Choose and adopt

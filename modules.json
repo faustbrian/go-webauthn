@@ -21,7 +21,7 @@
           "build_tags": []
         }
       ],
-      "purpose": "Experimental identified-user and discoverable WebAuthn none/ES256 protocol ceremonies with explicit RP/origin policy, bounded parsing and opaque verification custody; complete protocol and release qualification remain in development.",
+      "purpose": "Experimental identified-user and discoverable WebAuthn none/ES256 or opt-in Ed25519 backend ceremonies with explicit RP/origin policy, bounded parsing and opaque verification custody; complete interoperability and release qualification remain in development.",
       "lifecycle": "experimental",
       "kind": "public library",
       "releasable": true,
@@ -64,7 +64,7 @@
           "github.com/faustbrian/go-webauthn"
         ],
         "package_selection": {
-          "github.com/faustbrian/go-webauthn": "Experimental storage-neutral none/ES256 ceremony verification; use only the documented selected profile. Identity/session orchestration and complete qualification remain separate."
+          "github.com/faustbrian/go-webauthn": "Experimental storage-neutral none/ES256 or opt-in Ed25519 backend ceremony verification; use only the documented selected profiles. Ed25519 browser interoperability, identity/session orchestration and complete qualification remain separate."
         },
         "lifecycle_status": "active",
         "maturity": "experimental",

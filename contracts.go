@@ -1,6 +1,6 @@
 // Package webauthn implements a bounded WebAuthn Level 3 none-attestation,
-// ES256 protocol profile. It does not authorize identity enrollment or issue
-// sessions. Trusted identity workflows authorize the explicit context first.
+// ES256 or explicitly selected Ed25519 protocol profile. It does not authorize
+// identity enrollment or issue sessions. Trusted workflows authorize context first.
 package webauthn
 
 import (
@@ -111,14 +111,30 @@ type ExtensionOutputSet struct {
 	CredentialProtection *CredentialProtectionOutput
 }
 
+// Algorithm identifies one supported COSE signature algorithm and exact key
+// profile. Other COSE values, including other EdDSA curves, are unsupported.
+type Algorithm int32
+
+const (
+	// ES256 selects ECDSA P-256 with SHA-256 (COSE alg=-7, kty=2, crv=1).
+	ES256 Algorithm = -7
+	// EdDSA selects only Ed25519 (COSE alg=-8, kty=1, crv=6), not Ed448.
+	EdDSA Algorithm = -8
+)
+
 // Config selects one trusted tenant and one RP. This finite profile always
-// requires UP and UV, none attestation, ES256, and a five-minute 32-byte challenge.
+// requires UP and UV, none attestation, and a five-minute 32-byte challenge.
 // ChallengeKey is a nonzero deployment-owned HMAC key; keep it stable while
 // ceremonies exist. The service copies it and never serializes it.
 type Config struct {
-	TenantID                 identity.TenantID
-	RelyingParty             RelyingParty
-	Extensions               ExtensionRequestSet
+	TenantID     identity.TenantID
+	RelyingParty RelyingParty
+	Extensions   ExtensionRequestSet
+	// Algorithms is an ordered, copied allowlist used for both ceremonies.
+	// Nil preserves the legacy ES256-only profile and stored ceremony bytes.
+	// An explicit list must be nonempty, unique and limited to ES256/EdDSA.
+	// Changing it invalidates in-flight ceremonies; also advance RP.Version.
+	Algorithms               []Algorithm
 	ChallengeKey             ChallengeDigestKey
 	DevelopmentLocalhostHTTP bool
 	MaximumDuration          time.Duration
@@ -167,6 +183,9 @@ type CeremonyIntent struct {
 	// ResidentKeyRequired selects resident-required creation, never a claim
 	// that an unsigned browser extension proves authenticator residency.
 	ResidentKeyRequired bool `json:",omitempty"`
+	// Algorithms freezes the exact explicit profile. Absent means legacy ES256,
+	// never the current service's expanded policy. Omission preserves old rows.
+	Algorithms []Algorithm `json:",omitempty"`
 }
 
 func (CeremonyIntent) Format(s fmt.State, _ rune) { redact(s) }

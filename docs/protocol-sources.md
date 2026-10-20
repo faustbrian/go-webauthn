@@ -1,8 +1,8 @@
 # Selected protocol and source identity
 
 These are finite **selected ceremony profiles**, not whole-unit
-conformance or a release. The supported algorithm/attestation combination is ES256 with
-`none`; unsupported profiles fail closed. Other algorithms, trusted attestation,
+conformance or a release. The supported algorithm/attestation combinations are ES256 or
+explicitly selected Ed25519 with `none`; unsupported profiles fail closed. RSA, trusted attestation,
 metadata, sessions, passkey orchestration and reference/HTTP
 composition remain later scope under the complete retained goals.
 The discoverable profile is a native prerequisite for later passkey integration,
@@ -14,6 +14,8 @@ not closure of M16's signup, session and management journeys.
 | [FIDO CTAP 2.1](https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html) | Proposed Standard, 15 June 2021; credential protection §12.1 | `d834d83c3bd317fffc31bd24b9a3c09a7e27d9934f84282963c37f8d60882c03` |
 | [Public Suffix List](https://raw.githubusercontent.com/publicsuffix/list/e1b8015c3b2f0f4f8c18659c2480fc1a22c07b20/public_suffix_list.dat) | `e1b8015c3b2f0f4f8c18659c2480fc1a22c07b20` | `fe6adc7fb8014f57d28d69b18d0aa3e581efb432544922e12131a5d4a87bd954` |
 | [Web Platform Tests](https://codeload.github.com/web-platform-tests/wpt/tar.gz/9bc6e2404bff5349e48d7962b0a495582bc5ade8) | `9bc6e2404bff5349e48d7962b0a495582bc5ade8` | `559c6d1edbff75dfbacb10a3466a36da8897dc3f586da1866a7b718f928a837a` |
+| [EdDSA](https://www.rfc-editor.org/rfc/rfc8032.txt) | RFC 8032, January 2017; §7.1 TEST 1 public key/signature | `ed63657ff389301282b169b0abde9b5dd2c7e4d524fdfa5da6ff3094fc93c4c3` |
+| [COSE algorithms](https://www.rfc-editor.org/rfc/rfc9053.txt) | RFC 9053, August 2022; EdDSA and OKP key parameters | `3d470615875620375f8453ba25b8dce7e4d0271e76b0b79a46df34ccb2d56ab0` |
 
 The complete PSL is embedded unchanged from `docs/public_suffix_list.dat`.
 It is Mozilla Public License 2.0; its upstream license notice is retained in
@@ -29,6 +31,15 @@ CBOR/COSE semantics additionally follow [RFC 8949](https://www.rfc-editor.org/rf
 definite-length CBOR with duplicate scalar map keys rejected; tags, floating
 point, indefinite lengths and private/alternate COSE key profiles are unsupported.
 Client data is hashed byte-for-byte, not reserialized.
+The optional EdDSA profile is pinned to Ed25519 (`alg=-8`, `kty=1`, `crv=6`),
+not all curves historically assigned to EdDSA. RFC 8032's published public key
+and signature are retained as an official crypto oracle; no RFC private key
+is retained. An additional fixed WebAuthn-format signature was generated on
+2026-10-20 by OpenSSL 3.5.9 (`pkeyutl -sign -rawin`) over
+`authenticatorData || SHA256(clientDataJSON)` using a disposable generated
+Ed25519 key. Its public key/signature and exact client data are retained in
+`algorithm_test.go`; the private key is discarded. This is independent crypto
+verification, not an independent authenticator/browser ceremony claim.
 Configured origins follow [RFC6454 §6.2](https://www.rfc-editor.org/rfc/rfc6454#section-6.2)
 serialization: default ports and an empty trailing port delimiter are rejected,
 not silently normalized into a different exact-origin policy.
@@ -59,6 +70,12 @@ No private transaction or substitute command authority is introduced.
   are frozen into the ceremony. `crossOrigin=true` and any `topOrigin` member
   deny. Only the explicit exact `http://localhost:<port>` development exception
   is supported; production configuration keeps it disabled.
+- Explicit algorithm selection is copied, advertised in exact order, stored
+  with ceremony authority and included in the existing keyed challenge digest.
+  Absent selection preserves legacy ES256 bytes and fingerprints. Changing the
+  profile rejects in-flight ceremonies even without a version bump; version
+  configuration must still advance. Native credential JSON stores the exact
+  COSE bytes/algorithm and requires no new schema or installed-history rewrite.
 - Resident-required registration and assertions without an allowlist follow
   the same pinned WebAuthn §5.4.4/§7.2 profile. The returned 32-byte handle must
   resolve the exact credential/subject mapping; signature verification and
@@ -109,3 +126,6 @@ for WebCrypto verification before the separate Go verifier and durable Store
 accept it. Raw browser responses and challenges remain in memory-only pipes,
 never logs or recorded browser traces. This proves only the selected ceremony
 profile, not UI behavior, all browsers/authenticators or the complete WPT suite.
+This retained browser profile is ES256-only. No Ed25519 browser/authenticator
+evidence is claimed; that interoperability obligation remains open, as do the
+whole-unit coverage, mutation, release and broader qualification gates.

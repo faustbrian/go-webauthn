@@ -21,7 +21,10 @@
   "words": [
     "CBOR",
     "COSE",
+    "Ed25519",
+    "EdDSA",
     "Golib",
+    "OpenSSL",
     "WebAuthn"
   ]
 }

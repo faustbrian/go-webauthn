@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"slices"
 	"sync"
 	"time"
 )
@@ -201,7 +202,15 @@ func (o *optionsState) transfer(ctx context.Context, deliver func(context.Contex
 			options["rp"] = map[string]string{"id": o.record.Intent.RPID, "name": o.rpName}
 			h := base64.RawURLEncoding.EncodeToString(o.record.Intent.UserHandle)
 			options["user"] = map[string]string{"id": h, "name": h, "displayName": h}
-			options["pubKeyCredParams"] = []map[string]any{{"type": "public-key", "alg": -7}}
+			algorithms := o.record.Intent.Algorithms
+			if algorithms == nil {
+				algorithms = []Algorithm{ES256}
+			}
+			params := make([]map[string]any, len(algorithms))
+			for i, algorithm := range algorithms {
+				params[i] = map[string]any{"type": "public-key", "alg": algorithm}
+			}
+			options["pubKeyCredParams"] = params
 			options["attestation"] = "none"
 			resident := "discouraged"
 			if o.record.Intent.ResidentKeyRequired {
@@ -269,6 +278,17 @@ func challengeDigest(key [32]byte, r CeremonyRecord, challenge []byte) [32]byte 
 	binary.BigEndian.PutUint64(n[:], uint64(r.ExpiresAt.UnixMicro()))
 	_, _ = h.Write(n[:])
 	_, _ = h.Write(challenge)
+	// Add a domain-separated exact ordered policy only for explicit selection.
+	// Legacy nil ceremonies retain their original v1 challenge digest bytes.
+	if r.Intent.Algorithms != nil {
+		_, _ = h.Write([]byte("webauthn-algorithms-v1"))
+		binary.BigEndian.PutUint64(n[:], uint64(len(r.Intent.Algorithms)))
+		_, _ = h.Write(n[:])
+		for _, algorithm := range r.Intent.Algorithms {
+			binary.BigEndian.PutUint64(n[:], uint64(int64(algorithm)))
+			_, _ = h.Write(n[:])
+		}
+	}
 	var out [32]byte
 	copy(out[:], h.Sum(nil))
 	return out
@@ -276,6 +296,7 @@ func challengeDigest(key [32]byte, r CeremonyRecord, challenge []byte) [32]byte 
 func cloneIntent(i CeremonyIntent) CeremonyIntent {
 	i.UserHandle = bytes.Clone(i.UserHandle)
 	i.AllowedCredentials = cloneIDs(i.AllowedCredentials)
+	i.Algorithms = slices.Clone(i.Algorithms)
 	return i
 }
 func cloneCeremony(r CeremonyRecord) CeremonyRecord { r.Intent = cloneIntent(r.Intent); return r }

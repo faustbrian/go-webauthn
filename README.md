@@ -1,6 +1,6 @@
 # go-webauthn
 
-**Selected identified-user and discoverable none/ES256 profiles; whole-unit qualification
+**Selected identified-user and discoverable none/ES256 or opt-in Ed25519 profiles; whole-unit qualification
 and release remain incomplete.**
 
 The root module owns WebAuthn protocol verification. The independent
@@ -8,7 +8,7 @@ The root module owns WebAuthn protocol verification. The independent
 through the existing identity coordinator. Neither owns identity enrollment
 authorization, sessions, passkey workflows, browser UI or HTTP routes.
 
-The candidate selects ES256, `none` attestation, exact tenant/
+The candidate defaults to ES256, with explicit Ed25519 selection, `none` attestation, exact tenant/
 RP/origin binding, mandatory UP/UV, 32-byte opaque user handles, five-minute
 single-use challenges, typed `credProps`/`credProtect`, backup flags and counter
 policy. Unsupported variants fail closed. Source identity, precise bounds and
@@ -37,6 +37,29 @@ the selected implementation's security boundaries.
    allowlist. `VerifyAssertion` verifies exact client-data bytes and signature,
    then atomically consumes the ceremony and updates counter/backup/version
    before returning an opaque `VerifiedAssertion`.
+
+### Explicit Ed25519 selection
+
+`Config.Algorithms` is an ordered allowlist: for example,
+`[]webauthn.Algorithm{webauthn.ES256, webauthn.EdDSA}` enables both, while
+`[]webauthn.Algorithm{webauthn.EdDSA}` selects only Ed25519. `EdDSA` means the
+exact COSE `alg=-8`, `kty=1`, `crv=6`, 32-byte public-key profile; Ed448,
+X25519, RSA, private-key members and other algorithm/key combinations deny.
+The service copies the list, advertises exactly that order in creation options,
+and binds the frozen selection into every registration/assertion ceremony.
+Nil retains the existing ES256-only profile and original serialized rows and
+challenge digests; an explicit empty, duplicate or unsupported list is invalid.
+Changing the policy rejects old in-flight ceremonies instead of widening them;
+also advance `RelyingParty.Version` when changing configuration.
+
+Existing credential records and migrations are unchanged. Assertions dispatch
+from the stored COSE key and matching algorithm, never by signature inference.
+Ed25519 verifies the exact authenticator-data/client-hash message with Go's
+standard crypto implementation; there is no pre-hashed mode or algorithm fallback.
+Identified and discoverable paths retain the same current-subject, one-use,
+counter/backup, rollback and historical-recovery contracts. Independent Ed25519
+crypto fixtures are exercised, but actual Ed25519 browser/authenticator
+interoperability remains unverified; retained Chromium evidence is ES256-only.
 
 ### Discoverable credentials
 
@@ -97,7 +120,7 @@ original no-change failure audit; it cannot retain a partial success mutation
 or lifecycle effect.
 
 Current exclusions include shared RP tenancy,
-Ed25519/RSA, trusted attestation/metadata, credential management, key rotation,
+RSA, trusted attestation/metadata, credential management, key rotation,
 passkeys, sessions and reference/HTTP composition. They remain requirements of
 the complete retained goals, not silently removed obligations.
 

@@ -26,6 +26,15 @@ func New(c Config, d Dependencies) (Service, error) {
 		return nil, Invalid{Field: "configuration"}
 	}
 	seen := map[string]bool{}
+	if c.Algorithms != nil && (len(c.Algorithms) == 0 || len(c.Algorithms) > 2) {
+		return nil, Invalid{Field: "algorithms"}
+	}
+	for i, algorithm := range c.Algorithms {
+		if algorithm != ES256 && algorithm != EdDSA || slices.Contains(c.Algorithms[:i], algorithm) {
+			return nil, Invalid{Field: "algorithms"}
+		}
+	}
+	c.Algorithms = slices.Clone(c.Algorithms)
 	for _, o := range c.RelyingParty.Origins {
 		if seen[o] || !validOrigin(o, c.RelyingParty.ID, c.DevelopmentLocalhostHTTP) {
 			return nil, Invalid{Field: "origin"}
@@ -105,7 +114,7 @@ func (s *service) create(ctx context.Context, c CeremonyContext, handle []byte, 
 	}
 	ctx, cancel := context.WithTimeout(ctx, s.config.MaximumDuration)
 	defer cancel()
-	i := CeremonyIntent{Context: c, Kind: kind, RPID: s.config.RelyingParty.ID, RPVersion: s.config.RelyingParty.Version, Origin: origin, UserHandle: bytes.Clone(handle), AllowedCredentials: cloneIDs(ids), Extensions: s.config.Extensions, ResidentKeyRequired: resident}
+	i := CeremonyIntent{Context: c, Kind: kind, RPID: s.config.RelyingParty.ID, RPVersion: s.config.RelyingParty.Version, Origin: origin, UserHandle: bytes.Clone(handle), AllowedCredentials: cloneIDs(ids), Extensions: s.config.Extensions, ResidentKeyRequired: resident, Algorithms: slices.Clone(s.config.Algorithms)}
 	state := &creationState{intent: i, key: s.config.ChallengeKey.key()}
 	r, ch, outcome, e := s.store.CreateCeremony(ctx, CeremonyCreation{access: func() *creationState { return state }})
 	if e != nil || outcome != identity.CommitOutcomeCommitted {
@@ -158,7 +167,7 @@ func (s *service) load(ctx context.Context, c CeremonyContext, id, origin, kind 
 	if kind == "get-discoverable" {
 		validShape = len(r.Intent.UserHandle) == 0 && len(r.Intent.AllowedCredentials) == 0 && !r.Intent.ResidentKeyRequired
 	}
-	if r.ID != id || r.Version != version || r.Intent.Kind != kind || r.Intent.Context.TenantID != c.TenantID || r.Intent.Context.UserID != c.UserID || r.Intent.Context.AnonymousFlowID != c.AnonymousFlowID || r.Intent.Context.ActorID != c.ActorID || r.Intent.RPID != s.config.RelyingParty.ID || r.Intent.RPVersion != s.config.RelyingParty.Version || r.Intent.Origin != origin || r.Intent.Extensions != s.config.Extensions || !validShape || !validIDs(r.Intent.AllowedCredentials) || r.ChallengeDigest == ([32]byte{}) || r.ExpiresAt.IsZero() {
+	if r.ID != id || r.Version != version || r.Intent.Kind != kind || r.Intent.Context.TenantID != c.TenantID || r.Intent.Context.UserID != c.UserID || r.Intent.Context.AnonymousFlowID != c.AnonymousFlowID || r.Intent.Context.ActorID != c.ActorID || r.Intent.RPID != s.config.RelyingParty.ID || r.Intent.RPVersion != s.config.RelyingParty.Version || r.Intent.Origin != origin || r.Intent.Extensions != s.config.Extensions || !sameAlgorithms(r.Intent.Algorithms, s.config.Algorithms) || !validShape || !validIDs(r.Intent.AllowedCredentials) || r.ChallengeDigest == ([32]byte{}) || r.ExpiresAt.IsZero() {
 		return CeremonyRecord{}, Denied{}
 	}
 	return cloneCeremony(r), nil
@@ -277,7 +286,7 @@ func (s *service) verifyAssertion(ctx context.Context, r VerifyAssertionRequest,
 	} else {
 		before, e = s.store.LoadCredential(ctx, q, id)
 	}
-	if e != nil || before.TenantID != r.Context.TenantID || !discoverable && before.UserID != r.Context.UserID || before.RPID != ceremony.Intent.RPID || !bytes.Equal(before.ID, id) || !discoverable && (!bytes.Equal(before.UserHandle, ceremony.Intent.UserHandle) || before.Version != r.ExpectedCredentialVersion) || before.Algorithm != -7 || before.BackupState && !before.BackupEligible {
+	if e != nil || before.TenantID != r.Context.TenantID || !discoverable && before.UserID != r.Context.UserID || before.RPID != ceremony.Intent.RPID || !bytes.Equal(before.ID, id) || !discoverable && (!bytes.Equal(before.UserHandle, ceremony.Intent.UserHandle) || before.Version != r.ExpectedCredentialVersion) || !allowsAlgorithm(ceremony.Intent.Algorithms, Algorithm(before.Algorithm)) || before.BackupState && !before.BackupEligible {
 		return VerifiedAssertion{}, Denied{}
 	}
 	after, risk, e := assertionCredential(b, client, ceremony, before)
@@ -331,7 +340,18 @@ func (s *service) Recover(ctx context.Context, r RecoveryRequest) (identity.Comm
 	return s.store.Recover(ctx, r)
 }
 func sameIntent(a, b CeremonyIntent) bool {
-	return a.Context == b.Context && a.Kind == b.Kind && a.RPID == b.RPID && a.RPVersion == b.RPVersion && a.Origin == b.Origin && a.Extensions == b.Extensions && a.ResidentKeyRequired == b.ResidentKeyRequired && bytes.Equal(a.UserHandle, b.UserHandle) && slices.EqualFunc(a.AllowedCredentials, b.AllowedCredentials, bytes.Equal)
+	return a.Context == b.Context && a.Kind == b.Kind && a.RPID == b.RPID && a.RPVersion == b.RPVersion && a.Origin == b.Origin && a.Extensions == b.Extensions && a.ResidentKeyRequired == b.ResidentKeyRequired && sameAlgorithms(a.Algorithms, b.Algorithms) && bytes.Equal(a.UserHandle, b.UserHandle) && slices.EqualFunc(a.AllowedCredentials, b.AllowedCredentials, bytes.Equal)
+}
+
+func sameAlgorithms(a, b []Algorithm) bool {
+	return (a == nil) == (b == nil) && slices.Equal(a, b)
+}
+
+func allowsAlgorithm(selected []Algorithm, algorithm Algorithm) bool {
+	if selected == nil {
+		return algorithm == ES256
+	}
+	return slices.Contains(selected, algorithm)
 }
 func sameCredential(a, b Credential) bool {
 	if a.TenantID != b.TenantID || a.UserID != b.UserID || a.RPID != b.RPID || a.Algorithm != b.Algorithm || a.AAGUID != b.AAGUID || a.Counter != b.Counter || a.BackupEligible != b.BackupEligible || a.BackupState != b.BackupState || a.Version != b.Version || !bytes.Equal(a.ID, b.ID) || !bytes.Equal(a.UserHandle, b.UserHandle) || !bytes.Equal(a.PublicKey, b.PublicKey) {

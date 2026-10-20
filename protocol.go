@@ -3,6 +3,7 @@ package webauthn
 import (
 	"bytes"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/sha256"
 	"encoding/binary"
@@ -17,6 +18,7 @@ type authenticatorData struct {
 	id, key    []byte
 	aaguid     [16]byte
 	extensions map[any]any
+	algorithm  Algorithm
 }
 
 func parseAuthenticator(wire []byte, rpid string, registration bool) (authenticatorData, error) {
@@ -57,7 +59,7 @@ func parseAuthenticator(wire []byte, rpid string, registration bool) (authentica
 		if !ok {
 			return a, Invalid{Field: "cose_key"}
 		}
-		if _, e = es256Key(key); e != nil {
+		if a.algorithm, _, e = coseKey(key); e != nil {
 			return a, e
 		}
 		a.key = bytes.Clone(wire[offset : offset+r.offset])
@@ -77,6 +79,30 @@ func parseAuthenticator(wire []byte, rpid string, registration bool) (authentica
 		return a, Invalid{Field: "authenticator_trailing"}
 	}
 	return a, nil
+}
+
+func coseKey(m map[any]any) (Algorithm, any, error) {
+	alg, ok := cborInteger(m[uint64(3)])
+	if !ok {
+		return 0, nil, Invalid{Field: "cose_key"}
+	}
+	switch alg {
+	case int64(ES256):
+		key, err := es256Key(m)
+		return ES256, key, err
+	case int64(EdDSA):
+		// RFC 9053 §2.2 / §7: this profile selects only public OKP Ed25519,
+		// with exact 32-octet x. Reject Ed448, X25519 and private members.
+		kty, k := cborInteger(m[uint64(1)])
+		crv, c := cborInteger(m[int64(-1)])
+		x, xok := m[int64(-2)].([]byte)
+		if len(m) != 4 || !k || !c || kty != 1 || crv != 6 || !xok || len(x) != ed25519.PublicKeySize {
+			return 0, nil, Invalid{Field: "cose_key"}
+		}
+		return EdDSA, ed25519.PublicKey(bytes.Clone(x)), nil
+	default:
+		return 0, nil, Invalid{Field: "cose_key"}
+	}
 }
 func es256Key(m map[any]any) (*ecdsa.PublicKey, error) {
 	// COSE EC2 requires kty=2, alg=-7, crv=1 and exactly 32-byte coordinates.
@@ -126,11 +152,14 @@ func registrationCredential(att, id []byte, r CeremonyRecord, clientExt map[stri
 	if !bytes.Equal(a.id, id) {
 		return c, Denied{}
 	}
+	if !allowsAlgorithm(r.Intent.Algorithms, a.algorithm) {
+		return c, Denied{}
+	}
 	ext, e := selectedExtensions(r.Intent.Extensions, a.extensions, clientExt, true)
 	if e != nil {
 		return c, e
 	}
-	c = Credential{TenantID: r.Intent.Context.TenantID, UserID: r.Intent.Context.UserID, RPID: r.Intent.RPID, ID: bytes.Clone(id), UserHandle: bytes.Clone(r.Intent.UserHandle), PublicKey: a.key, Algorithm: -7, AAGUID: a.aaguid, Counter: a.counter, BackupEligible: a.flags&8 != 0, BackupState: a.flags&16 != 0, Extensions: ext, Version: 1}
+	c = Credential{TenantID: r.Intent.Context.TenantID, UserID: r.Intent.Context.UserID, RPID: r.Intent.RPID, ID: bytes.Clone(id), UserHandle: bytes.Clone(r.Intent.UserHandle), PublicKey: a.key, Algorithm: int32(a.algorithm), AAGUID: a.aaguid, Counter: a.counter, BackupEligible: a.flags&8 != 0, BackupState: a.flags&16 != 0, Extensions: ext, Version: 1}
 	return c, nil
 }
 func assertionCredential(b browserResponse, client []byte, r CeremonyRecord, before Credential) (Credential, bool, error) {
@@ -158,9 +187,9 @@ func assertionCredential(b browserResponse, client []byte, r CeremonyRecord, bef
 	if e != nil {
 		return Credential{}, false, e
 	}
-	key, e := es256Key(m)
-	if e != nil {
-		return Credential{}, false, e
+	algorithm, key, e := coseKey(m)
+	if e != nil || int32(algorithm) != before.Algorithm || !allowsAlgorithm(r.Intent.Algorithms, algorithm) {
+		return Credential{}, false, Denied{}
 	}
 	sig, e := decodeBase64(b.Response.Signature, 80)
 	if e != nil {
@@ -171,8 +200,17 @@ func assertionCredential(b browserResponse, client []byte, r CeremonyRecord, bef
 	signed := make([]byte, 0, len(auth)+32)
 	signed = append(signed, auth...)
 	signed = append(signed, clientHash[:]...)
-	hash := sha256.Sum256(signed)
-	if !ecdsa.VerifyASN1(key, hash[:], sig) {
+	valid := false
+	switch public := key.(type) {
+	case *ecdsa.PublicKey:
+		hash := sha256.Sum256(signed)
+		valid = ecdsa.VerifyASN1(public, hash[:], sig)
+	case ed25519.PublicKey:
+		// WebAuthn §6.5.5: Ed25519 signs the message, not its SHA-256 digest;
+		// Ed25519ph and Ed25519ctx are not selected profiles.
+		valid = ed25519.Verify(public, signed, sig)
+	}
+	if !valid {
 		return Credential{}, false, Denied{}
 	}
 	risk := before.BackupEligible && a.counter <= before.Counter
