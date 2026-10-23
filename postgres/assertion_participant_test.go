@@ -19,6 +19,12 @@ func TestAssertionParticipationInvalidCustody(t *testing.T) {
 	if p, err := store.AssertionFinalization(webauthn.AssertionTransition{}); err == nil || p != nil {
 		t.Fatal("zero store/transition accepted")
 	}
+	if p, err := store.PreauthAssertionCreation(webauthn.CeremonyCreation{}); err == nil || p != nil {
+		t.Fatal("zero store/preauth creation accepted")
+	}
+	if p, err := store.PreauthAssertionFinalization(webauthn.AssertionTransition{}); err == nil || p != nil {
+		t.Fatal("zero store/preauth transition accepted")
+	}
 	var creation webauthnpg.AssertionCreation
 	if _, err := creation.Fields(); err == nil {
 		t.Fatal("zero creation supplied fields")

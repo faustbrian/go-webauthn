@@ -23,9 +23,10 @@ const assertionField = "webauthn.assertion.intent"
 // Parent current-authority, risk, mapping and session admission remain required.
 // Zero values deny and no goroutine or pool lifetime is owned.
 type AssertionCreation struct {
-	phase  *phase
-	input  webauthn.CeremonyCreation
-	digest [32]byte
+	phase   *phase
+	input   webauthn.CeremonyCreation
+	digest  [32]byte
+	preauth bool
 }
 
 // AssertionFinalization retains one genuine root verifier-issued identified
@@ -34,29 +35,51 @@ type AssertionCreation struct {
 // protocol success only after the parent's actual final commit is acknowledged.
 // Copies share serial-use result custody; zero values deny.
 type AssertionFinalization struct {
-	phase  *phase
-	digest [32]byte
+	phase   *phase
+	digest  [32]byte
+	preauth bool
 }
 
-func assertionIntent(i webauthn.CeremonyIntent) bool {
+func assertionContext(c webauthn.CeremonyContext, preauth bool) bool {
+	if !preauth {
+		return registrationContext(c)
+	}
+	_, err := identity.ParseCommandID(string(c.CommandID))
+	return err == nil && c.AnonymousFlowID == "" && c.TenantID != "" && c.UserID != "" && c.ActorID != "" && string(c.ActorID) != string(c.UserID)
+}
+
+func assertionIntent(i webauthn.CeremonyIntent, preauth bool) bool {
 	// The root owns mandatory UP/UV and none-attestation enrollment. Assertion
 	// has no residency claim; the passkey owner admits its enrolled mapping.
-	return i.Kind == "get" && len(i.UserHandle) == 32 && len(i.AllowedCredentials) > 0 && registrationContext(i.Context) && registrationAlgorithms(i.Algorithms)
+	return i.Kind == "get" && len(i.UserHandle) == 32 && len(i.AllowedCredentials) > 0 && assertionContext(i.Context, preauth) && registrationAlgorithms(i.Algorithms)
 }
 
 // AssertionCreation borrows the native store and the real root service's opaque
 // identified ES256 creation. It accepts no caller-assembled ceremony projection.
 // The parent owns primary/pool lifetime and must Discard every abandoned call.
 func (s *Store) AssertionCreation(input webauthn.CeremonyCreation) (*AssertionCreation, error) {
+	return s.assertionCreation(input, false)
+}
+
+// PreauthAssertionCreation selects identified preauthentication participation.
+// The original parent must attribute options to its trusted SubjectServiceAccount,
+// distinct from the identified target. This grants no authority over that target;
+// the parent still owns ingress, risk and current-account admission. The original
+// service actor must remain unchanged through root assertion verification.
+func (s *Store) PreauthAssertionCreation(input webauthn.CeremonyCreation) (*AssertionCreation, error) {
+	return s.assertionCreation(input, true)
+}
+
+func (s *Store) assertionCreation(input webauthn.CeremonyCreation, preauth bool) (*AssertionCreation, error) {
 	i, err := input.Intent()
-	if !s.usable() || err != nil || !assertionIntent(i) {
+	if !s.usable() || err != nil || !assertionIntent(i, preauth) {
 		return nil, webauthn.Invalid{Field: "assertion_creation"}
 	}
 	digest, err := assertionDigest(i)
 	if err != nil {
 		return nil, err
 	}
-	return &AssertionCreation{phase: &phase{store: s}, input: input, digest: digest}, nil
+	return &AssertionCreation{phase: &phase{store: s}, input: input, digest: digest, preauth: preauth}, nil
 }
 
 // AssertionFinalization accepts only an opaque cryptographically verified
@@ -65,15 +88,29 @@ func (s *Store) AssertionCreation(input webauthn.CeremonyCreation) (*AssertionCr
 // command-record 0-to-1 lifecycle. No independent commit or provisional result
 // is exposed by this constructor.
 func (s *Store) AssertionFinalization(input webauthn.AssertionTransition) (*AssertionFinalization, error) {
+	return s.assertionFinalization(input, false)
+}
+
+// PreauthAssertionFinalization accepts only a genuine root-verified assertion
+// made under the original service actor. Its final parent must be attributed to
+// the verified target as SubjectUser. Only parent attribution is bridged: the
+// immutable protocol mutation, ceremony and digest retain their service actor.
+// The parent separately owns current ingress/browser/risk and session authority;
+// this participant alone never authenticates an identity or issues a session.
+func (s *Store) PreauthAssertionFinalization(input webauthn.AssertionTransition) (*AssertionFinalization, error) {
+	return s.assertionFinalization(input, true)
+}
+
+func (s *Store) assertionFinalization(input webauthn.AssertionTransition, preauth bool) (*AssertionFinalization, error) {
 	m, err := input.Mutation()
-	if !s.usable() || err != nil || !assertionIntent(m.Ceremony.Intent) || !registrationContext(m.Context) || m.Before.Algorithm != int32(webauthn.ES256) || m.After.Algorithm != int32(webauthn.ES256) || m.Before.TenantID != m.Context.TenantID || m.Before.UserID != m.Context.UserID || m.After.TenantID != m.Context.TenantID || m.After.UserID != m.Context.UserID || !bytes.Equal(m.Before.UserHandle, m.Ceremony.Intent.UserHandle) {
+	if !s.usable() || err != nil || !assertionIntent(m.Ceremony.Intent, preauth) || !assertionContext(m.Context, preauth) || m.Ceremony.Intent.Context.ActorID != m.Context.ActorID || m.Before.Algorithm != int32(webauthn.ES256) || m.After.Algorithm != int32(webauthn.ES256) || m.Before.TenantID != m.Context.TenantID || m.Before.UserID != m.Context.UserID || m.After.TenantID != m.Context.TenantID || m.After.UserID != m.Context.UserID || !bytes.Equal(m.Before.UserHandle, m.Ceremony.Intent.UserHandle) {
 		return nil, webauthn.Invalid{Field: "assertion_finalization"}
 	}
 	digest, err := assertionDigest(m)
 	if err != nil {
 		return nil, err
 	}
-	return &AssertionFinalization{phase: &phase{store: s, assertion: &m, ceremony: m.Ceremony}, digest: digest}, nil
+	return &AssertionFinalization{phase: &phase{store: s, assertion: &m, ceremony: m.Ceremony}, digest: digest, preauth: preauth}, nil
 }
 
 func assertionDigest(v any) ([32]byte, error) {
@@ -118,13 +155,23 @@ func assertionOperation(finish bool) identity.FeatureOperation {
 	}
 	return identity.FeatureOperation{Owner: "passkey", OperationID: id, SchemaID: id + ".native-v1", SchemaVersion: 1, RecordRequirement: identity.FeatureRecordRequired}
 }
-func validateAssertion(c identity.Command, plan kernel.CommandPlan, scope webauthn.CeremonyContext, digest [32]byte, finish bool) error {
+func validateAssertion(c identity.Command, plan kernel.CommandPlan, scope webauthn.CeremonyContext, digest [32]byte, finish, preauth bool) error {
 	s, ok := c.Feature()
 	if !ok || s.Operation != assertionOperation(finish) || plan.Feature == nil || plan.Feature.Operation != s.Operation || plan.Feature.Contributor != registrationDescriptor() || plan.Lifecycle == nil || plan.Lifecycle.BeforeVersion != 0 || plan.Lifecycle.AfterVersion != 1 {
 		return webauthn.Invalid{Field: "assertion_parent"}
 	}
 	b := s.Binding
-	if b.CommandID != scope.CommandID || b.TenantID != scope.TenantID || b.UserID != scope.UserID || b.ActorID != scope.ActorID || b.ActorKind != authorization.SubjectUser || b.AnonymousFlowID != "" || b.CorrelationID != scope.CorrelationID {
+	actor, kind := scope.ActorID, authorization.SubjectUser
+	if preauth {
+		if finish {
+			// Root signature verification has already fixed the target. This
+			// relation does not rewrite its original service-attributed input.
+			actor = identity.ActorID(scope.UserID)
+		} else {
+			kind = authorization.SubjectServiceAccount
+		}
+	}
+	if b.CommandID != scope.CommandID || b.TenantID != scope.TenantID || b.UserID != scope.UserID || b.ActorID != actor || b.ActorKind != kind || b.AnonymousFlowID != "" || b.CorrelationID != scope.CorrelationID {
 		return webauthn.Denied{}
 	}
 	found := false
@@ -153,7 +200,7 @@ func (p *AssertionCreation) Validate(c identity.Command, plan kernel.CommandPlan
 	if err != nil {
 		return err
 	}
-	return validateAssertion(c, plan, i.Context, p.digest, false)
+	return validateAssertion(c, plan, i.Context, p.digest, false, p.preauth)
 }
 
 // Validate requires the exact selected parent and immutable original verified
@@ -162,7 +209,7 @@ func (p *AssertionFinalization) Validate(c identity.Command, plan kernel.Command
 	if p == nil || p.phase == nil {
 		return webauthn.Invalid{Field: "assertion_finalization"}
 	}
-	return validateAssertion(c, plan, p.phase.assertion.Context, p.digest, true)
+	return validateAssertion(c, plan, p.phase.assertion.Context, p.digest, true, p.preauth)
 }
 
 // Generate runs once after acknowledged new parent reservation and before Work
@@ -181,7 +228,7 @@ func (p *AssertionCreation) Generate(ctx context.Context, now time.Time) error {
 	return nil
 }
 
-func bindAssertion(ctx context.Context, w kernel.Work, owner kernel.FeatureExecutionContributor, c identity.Command, p *phase, digest [32]byte, scope webauthn.CeremonyContext, finish, apply bool) error {
+func bindAssertion(ctx context.Context, w kernel.Work, owner kernel.FeatureExecutionContributor, c identity.Command, p *phase, digest [32]byte, scope webauthn.CeremonyContext, finish, preauth, apply bool) error {
 	if ctx == nil || p == nil || owner == nil {
 		return webauthn.Invalid{Field: "assertion_work"}
 	}
@@ -194,7 +241,7 @@ func bindAssertion(ctx context.Context, w kernel.Work, owner kernel.FeatureExecu
 	if err != nil {
 		return err
 	}
-	if err = validateAssertion(c, kernel.CommandPlan{Feature: &f, Lifecycle: &l}, scope, digest, finish); err != nil {
+	if err = validateAssertion(c, kernel.CommandPlan{Feature: &f, Lifecycle: &l}, scope, digest, finish, preauth); err != nil {
 		return err
 	}
 	if !apply {
@@ -221,7 +268,7 @@ func (p *AssertionCreation) Apply(ctx context.Context, w kernel.Work, owner kern
 	if err != nil {
 		return err
 	}
-	if err = bindAssertion(ctx, w, owner, c, p.phase, p.digest, i.Context, false, true); err != nil {
+	if err = bindAssertion(ctx, w, owner, c, p.phase, p.digest, i.Context, false, p.preauth, true); err != nil {
 		return err
 	}
 	if err = p.phase.current(ctx, w); err != nil {
@@ -234,7 +281,7 @@ func (p *AssertionCreation) Apply(ctx context.Context, w kernel.Work, owner kern
 		return err
 	}
 	p.phase.applied = true
-	return checkAssertion(ctx, w, owner, c, p.phase, p.digest, i.Context, false)
+	return checkAssertion(ctx, w, owner, c, p.phase, p.digest, i.Context, false, p.preauth)
 }
 
 // Apply consumes the exact verified ceremony and stages its counter/backup/
@@ -244,7 +291,7 @@ func (p *AssertionFinalization) Apply(ctx context.Context, w kernel.Work, owner 
 	if p == nil || p.phase == nil || p.phase.participantReleased || p.phase.applied {
 		return webauthn.Invalid{Field: "assertion_finalization"}
 	}
-	if err := bindAssertion(ctx, w, owner, c, p.phase, p.digest, p.phase.assertion.Context, true, true); err != nil {
+	if err := bindAssertion(ctx, w, owner, c, p.phase, p.digest, p.phase.assertion.Context, true, p.preauth, true); err != nil {
 		return err
 	}
 	if err := p.phase.current(ctx, w); err != nil {
@@ -257,11 +304,11 @@ func (p *AssertionFinalization) Apply(ctx context.Context, w kernel.Work, owner 
 		return err
 	}
 	p.phase.applied = true
-	return checkAssertion(ctx, w, owner, c, p.phase, p.digest, p.phase.assertion.Context, true)
+	return checkAssertion(ctx, w, owner, c, p.phase, p.digest, p.phase.assertion.Context, true, p.preauth)
 }
 
-func checkAssertion(ctx context.Context, w kernel.Work, owner kernel.FeatureExecutionContributor, c identity.Command, p *phase, digest [32]byte, scope webauthn.CeremonyContext, finish bool) error {
-	if err := bindAssertion(ctx, w, owner, c, p, digest, scope, finish, false); err != nil {
+func checkAssertion(ctx context.Context, w kernel.Work, owner kernel.FeatureExecutionContributor, c identity.Command, p *phase, digest [32]byte, scope webauthn.CeremonyContext, finish, preauth bool) error {
+	if err := bindAssertion(ctx, w, owner, c, p, digest, scope, finish, preauth, false); err != nil {
 		return err
 	}
 	if !p.applied {
@@ -291,7 +338,7 @@ func (p *AssertionCreation) Check(ctx context.Context, w kernel.Work, owner kern
 	if err != nil {
 		return err
 	}
-	return checkAssertion(ctx, w, owner, c, p.phase, p.digest, i.Context, false)
+	return checkAssertion(ctx, w, owner, c, p.phase, p.digest, i.Context, false, p.preauth)
 }
 
 // Check preserves original verified ceremony limits in final precommit. It
@@ -300,7 +347,7 @@ func (p *AssertionFinalization) Check(ctx context.Context, w kernel.Work, owner 
 	if p == nil || p.phase == nil {
 		return webauthn.Invalid{Field: "assertion_finalization"}
 	}
-	return checkAssertion(ctx, w, owner, c, p.phase, p.digest, p.phase.assertion.Context, true)
+	return checkAssertion(ctx, w, owner, c, p.phase, p.digest, p.phase.assertion.Context, true, p.preauth)
 }
 
 func assertionResult(p *phase, r identity.CommandResult, finish bool) error {
@@ -376,7 +423,9 @@ func (s *Store) RecoverAssertion(ctx context.Context, w kernel.RecoveryWork, own
 	if err != nil {
 		return kernel.RecoveryUnknown, err
 	}
-	if f.Contributor != registrationDescriptor() || (f.Operation != assertionOperation(false) && f.Operation != assertionOperation(true)) || b.ActorKind != authorization.SubjectUser || string(b.ActorID) != string(b.UserID) || b.AnonymousFlowID != "" || l.BeforeVersion != 0 || l.AfterVersion != 1 {
+	self := b.ActorKind == authorization.SubjectUser && string(b.ActorID) == string(b.UserID)
+	serviceCreation := f.Operation == assertionOperation(false) && b.ActorKind == authorization.SubjectServiceAccount && b.ActorID != "" && string(b.ActorID) != string(b.UserID)
+	if f.Contributor != registrationDescriptor() || (f.Operation != assertionOperation(false) && f.Operation != assertionOperation(true)) || (!self && !serviceCreation) || b.AnonymousFlowID != "" || l.BeforeVersion != 0 || l.AfterVersion != 1 {
 		return kernel.RecoveryUnknown, webauthn.Denied{}
 	}
 	rows, err := w.Query(ctx, `SELECT 1 FROM webauthn.effects WHERE command_id=$1`, string(b.CommandID))

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add explicitly selected identified preauthentication assertion participation:
+  options retain their trusted ingress service actor through signature
+  verification, and only the opaque verified transition binds the final native
+  parent to the verified self-user. Original protocol attribution and exact
+  retry/recovery identity remain retained; existing self-user and registration
+  APIs are unchanged. This seam does not itself authenticate or issue sessions.
+
 - Add opaque identified ES256 assertion participation for native passkey
   signin options and verification. Ceremony creation and one-use credential
   counter/version updates can share the parent's existing identity-coordinator

@@ -28,6 +28,22 @@ cryptographically verified `AssertionTransition`. Mutable credential/mutation
 projections, matching descriptors, fields and boolean authorization cannot
 construct either input or confer identity authentication.
 
+The existing constructors select self-user parents throughout. Public
+unauthenticated identified signin instead explicitly selects
+`Store.PreauthAssertionCreation` and `Store.PreauthAssertionFinalization`.
+Creation requires the original trusted `SubjectServiceAccount` actor, distinct
+from the identified user. Root `VerifyAssertion` must retain that exact service
+actor: replacing it with the user before signature verification denies. Only
+the genuine opaque verified transition permits finalization to bind the final
+parent to `SubjectUser` with actor equal to the verified target. The protocol
+ceremony, mutation and complete intent digest retain the original service
+actor; this bridge changes parent attribution, not protocol evidence.
+
+The parent separately validates the actual ingress caller, original browser,
+risk evidence and current identity/passkey/session owners. An identified user
+or service actor in a request is not authentication. Neither participant can
+construct verifier custody from a decoded mutation or issue a session itself.
+
 ## One original command and one Work
 
 1. Add the participant's owned `Fields()` to the parent's original command and
@@ -72,6 +88,15 @@ a pending original journal remains unknown, never reconstructed authentication.
 Committed terminal history comes from the sole original coordinator. Recovery
 does not consume another proof, change counters, reissue a session, recreate
 options or restore challenge custody.
+
+Recovery admits service-attributed creation only for the exact signin-options
+operation; signin-verify still requires the original self-human parent. An
+exact service-context verification retry can read its original credential
+snapshot only under that command's native signin-verify effect, verified
+target, ceremony/RP and retained original service actor. The bounded retained
+ceremony must match that scope and identified assertion profile. Standalone
+assertion history retains its existing actor-equality rule. This snapshot lets
+the existing coordinator classify replay; it does not recreate authentication.
 
 The [public native-coordinator fixture](../postgres/assertion_participant_integration_test.go)
 uses real PostgreSQL and a genuinely registered ES256 credential to exercise

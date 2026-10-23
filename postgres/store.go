@@ -267,7 +267,9 @@ func (s *Store) LoadCredential(ctx context.Context, q webauthn.Lookup, id []byte
 	// input, never today's counter rebased as historical verification evidence.
 	// The selected native passkey participant records that same input under
 	// its actual parent purpose, so its sole coordinator can classify replay.
-	e := s.pool.Raw().QueryRow(ctx, `SELECT before_credential FROM webauthn.effects WHERE command_id=$1 AND tenant_id=$2 AND user_id=$3 AND actor_id=$4 AND purpose IN ('webauthn.assert','identity.passkey.signin-verify') AND ceremony_id=$5 AND before_credential->>'RPID'=$6`, string(q.Context.CommandID), string(q.Context.TenantID), string(q.Context.UserID), string(q.Context.ActorID), q.CeremonyID, q.RPID).Scan(&wire)
+	var retainedCeremony []byte
+	var actor, purpose string
+	e := s.pool.Raw().QueryRow(ctx, `SELECT before_credential,ceremony,actor_id,purpose FROM webauthn.effects WHERE command_id=$1 AND tenant_id=$2 AND user_id=$3 AND purpose IN ('webauthn.assert','identity.passkey.signin-verify') AND ceremony_id=$5 AND before_credential->>'RPID'=$6 AND (actor_id=$4 OR (purpose='identity.passkey.signin-verify' AND actor_id=user_id AND ceremony->'Intent'->'Context'->>'ActorID'=$4))`, string(q.Context.CommandID), string(q.Context.TenantID), string(q.Context.UserID), string(q.Context.ActorID), q.CeremonyID, q.RPID).Scan(&wire, &retainedCeremony, &actor, &purpose)
 	if errors.Is(e, pgx.ErrNoRows) {
 		e = s.pool.Raw().QueryRow(ctx, `SELECT record FROM webauthn.credentials WHERE rp_id=$1 AND credential_id=$2 AND tenant_id=$3 AND user_id=$4`, q.RPID, id, string(q.Context.TenantID), string(q.Context.UserID)).Scan(&wire)
 	}
@@ -277,6 +279,15 @@ func (s *Store) LoadCredential(ctx context.Context, q webauthn.Lookup, id []byte
 	}
 	if len(wire) > 32768 || json.Unmarshal(wire, &c) != nil || !bytes.Equal(c.ID, id) {
 		return c, webauthn.Unavailable{}
+	}
+	if actor != "" && actor != string(q.Context.ActorID) {
+		// Only native identified preauth assertions bridge service protocol
+		// attribution to their verified self-human parent. Check the complete
+		// retained ceremony, not caller-supplied context or a JSON actor alone.
+		var ceremony webauthn.CeremonyRecord
+		if purpose != "identity.passkey.signin-verify" || actor != string(q.Context.UserID) || len(retainedCeremony) > 262144 || json.Unmarshal(retainedCeremony, &ceremony) != nil || !assertionIntent(ceremony.Intent, true) || ceremony.ID != q.CeremonyID || ceremony.Intent.RPID != q.RPID || ceremony.Intent.Context.TenantID != q.Context.TenantID || ceremony.Intent.Context.UserID != q.Context.UserID || ceremony.Intent.Context.ActorID != q.Context.ActorID || q.Context.AnonymousFlowID != "" || ceremony.Version == 0 || ceremony.ChallengeDigest == ([32]byte{}) || ceremony.ExpiresAt.IsZero() || c.TenantID != q.Context.TenantID || c.UserID != q.Context.UserID || c.RPID != q.RPID || c.Version == 0 || !bytes.Equal(c.UserHandle, ceremony.Intent.UserHandle) {
+			return webauthn.Credential{}, webauthn.Denied{}
+		}
 	}
 	return c, nil
 }
