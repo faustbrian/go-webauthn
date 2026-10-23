@@ -53,7 +53,8 @@ func (p *phase) ValidateFeatureCommand(c identity.Command, plan kernel.CommandPl
 }
 func (p *phase) current(ctx context.Context, w kernel.Work) error {
 	user := p.binding.UserID
-	if p.binding.AnonymousFlowID != "" {
+	discoverable := p.binding.AnonymousFlowID != "" || p.assertion != nil && p.assertion.Ceremony.Intent.Kind == "get-discoverable"
+	if discoverable {
 		if p.creation != nil {
 			return nil
 		}
@@ -64,7 +65,7 @@ func (p *phase) current(ctx context.Context, w kernel.Work) error {
 	}
 	query := `SELECT status FROM identity.users WHERE tenant_id=$1 AND user_id=$2 FOR SHARE`
 	args := []any{string(p.binding.TenantID), string(user)}
-	if p.binding.AnonymousFlowID != "" {
+	if discoverable {
 		// DiscoverableStore's mapping is current authority, not metadata. Lock
 		// it through commit so a non-key tenant/user reassignment cannot race
 		// the verified credential snapshot; the final fence rechecks it too.
@@ -201,11 +202,18 @@ func (p *phase) applyCreation(ctx context.Context, w kernel.Work) error {
 }
 func (p *phase) consume(ctx context.Context, w kernel.Work) error {
 	r := p.ceremony
+	user, flow := p.binding.UserID, p.binding.AnonymousFlowID
+	if p.assertion != nil && r.Intent.Kind == "get-discoverable" {
+		// A verified resident assertion may finalize under its self-human
+		// parent, but its one-use ceremony remains in the original anonymous
+		// protocol scope. Never rewrite that stored ceremony to the parent.
+		user, flow = r.Intent.Context.UserID, r.Intent.Context.AnonymousFlowID
+	}
 	wire, e := json.Marshal(r)
 	if e != nil {
 		return identity.InvalidInputError{Field: "ceremony"}
 	}
-	n, e := w.Exec(ctx, `UPDATE webauthn.ceremonies SET consumed_by=$1 WHERE ceremony_id=$2 AND tenant_id=$3 AND COALESCE(user_id,'')=$4 AND rp_id=$5 AND consumed_by IS NULL AND expires_at>clock_timestamp() AND version=1 AND record=$6::jsonb AND COALESCE(anonymous_flow_id,'')=$7`, string(p.binding.CommandID), r.ID, string(p.binding.TenantID), string(p.binding.UserID), r.Intent.RPID, string(wire), p.binding.AnonymousFlowID)
+	n, e := w.Exec(ctx, `UPDATE webauthn.ceremonies SET consumed_by=$1 WHERE ceremony_id=$2 AND tenant_id=$3 AND COALESCE(user_id,'')=$4 AND rp_id=$5 AND consumed_by IS NULL AND expires_at>clock_timestamp() AND version=1 AND record=$6::jsonb AND COALESCE(anonymous_flow_id,'')=$7`, string(p.binding.CommandID), r.ID, string(p.binding.TenantID), string(user), r.Intent.RPID, string(wire), flow)
 	if e != nil {
 		return e
 	}

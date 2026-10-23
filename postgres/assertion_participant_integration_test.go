@@ -35,14 +35,20 @@ type assertionOwner struct {
 	creation                                 *webauthnpg.AssertionCreation
 	finalization                             *webauthnpg.AssertionFinalization
 	store                                    *webauthnpg.Store
+	discoverable                             bool
+	afterApply                               func(context.Context, kernel.Work, identity.Command) error
 	failApply, failCommit, foreign, withdraw bool
 }
 
 func (*assertionOwner) Descriptor() kernel.ContributorDescriptor {
 	return kernel.ContributorDescriptor{Owner: "passkey/postgres", ContractID: "identity.passkey", Version: 1}
 }
-func (*assertionOwner) FeatureOperations() []identity.FeatureOperation {
-	return []identity.FeatureOperation{assertionOperation(false), assertionOperation(true)}
+func (p *assertionOwner) FeatureOperations() []identity.FeatureOperation {
+	begin := assertionOperation(false)
+	if p.discoverable {
+		begin.SubjectRequirement = identity.FeatureSubjectAnonymousFlow
+	}
+	return []identity.FeatureOperation{begin, assertionOperation(true)}
 }
 func assertionOperation(finish bool) identity.FeatureOperation {
 	id := "identity.passkey.signin-options"
@@ -92,6 +98,11 @@ func (p *assertionOwner) ApplyFeature(ctx context.Context, w kernel.Work, c iden
 	if p.failApply {
 		return identity.FeatureReceipt{}, identity.ForbiddenError{}
 	}
+	if p.afterApply != nil {
+		if err := p.afterApply(ctx, w, c); err != nil {
+			return identity.FeatureReceipt{}, err
+		}
+	}
 	s, _ := c.Feature()
 	return identity.FeatureReceipt{Operation: s.Operation, AfterVersion: 1}, nil
 }
@@ -132,6 +143,9 @@ type assertionStore struct {
 	pool                                     *database.Pool
 	config                                   kernel.CoordinatorConfig
 	preauth                                  bool
+	discoverable                             bool
+	generationOffset                         time.Duration
+	afterApply                               func(context.Context, kernel.Work, identity.Command) error
 	failApply, failCommit, foreign, withdraw bool
 	invalidParent                            string
 	observeCreation                          func(*webauthnpg.AssertionCreation, identity.CommandResult)
@@ -161,7 +175,12 @@ func (s *assertionStore) coordinator(p *assertionOwner) (*kernel.Coordinator, *k
 }
 func (s *assertionStore) execute(ctx context.Context, p *assertionOwner, scope webauthn.CeremonyContext, fields []identity.FeatureField) (identity.CommandResult, error) {
 	op := assertionOperation(p.finalization != nil)
+	p.discoverable = s.discoverable
+	if s.discoverable && p.finalization == nil {
+		op.SubjectRequirement = identity.FeatureSubjectAnonymousFlow
+	}
 	b := identity.CommandBinding{CommandID: scope.CommandID, TenantID: scope.TenantID, UserID: scope.UserID, ActorID: scope.ActorID, ActorKind: authorization.SubjectUser, OperationID: op.OperationID, SchemaID: op.SchemaID, SchemaVersion: 1, PolicyID: "assertion-participation-test", PolicyVersion: 1, CorrelationID: scope.CorrelationID, RecordID: string(scope.CommandID)}
+	b.AnonymousFlowID = scope.AnonymousFlowID
 	if s.preauth {
 		if p.finalization == nil {
 			b.ActorKind = authorization.SubjectServiceAccount
@@ -184,6 +203,8 @@ func (s *assertionStore) execute(ctx context.Context, p *assertionOwner, scope w
 		} else {
 			b.ActorKind = authorization.SubjectUser
 		}
+	case "flow":
+		b.AnonymousFlowID = "different-original-flow"
 	case "intent":
 		fields[0].Value.Bytes = bytes.Clone(fields[0].Value.Bytes)
 		fields[0].Value.Bytes[0] ^= 1
@@ -193,6 +214,7 @@ func (s *assertionStore) execute(ctx context.Context, p *assertionOwner, scope w
 		return identity.CommandResult{}, err
 	}
 	p.command, p.store, p.failApply, p.failCommit, p.foreign, p.withdraw = c, s.Store, s.failApply, s.failCommit, s.foreign, s.withdraw
+	p.afterApply = s.afterApply
 	coordinator, r, err := s.coordinator(p)
 	if err != nil {
 		return identity.CommandResult{}, err
@@ -223,7 +245,7 @@ func (s *assertionStore) execute(ctx context.Context, p *assertionOwner, scope w
 		if err = s.pool.Raw().QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
 			return identity.CommandResult{}, err
 		}
-		if err = p.creation.Generate(ctx, now); err != nil {
+		if err = p.creation.Generate(ctx, now.Add(s.generationOffset)); err != nil {
 			return identity.CommandResult{}, err
 		}
 	}

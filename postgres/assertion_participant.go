@@ -157,7 +157,7 @@ func assertionOperation(finish bool) identity.FeatureOperation {
 }
 func validateAssertion(c identity.Command, plan kernel.CommandPlan, scope webauthn.CeremonyContext, digest [32]byte, finish, preauth bool) error {
 	s, ok := c.Feature()
-	if !ok || s.Operation != assertionOperation(finish) || plan.Feature == nil || plan.Feature.Operation != s.Operation || plan.Feature.Contributor != registrationDescriptor() || plan.Lifecycle == nil || plan.Lifecycle.BeforeVersion != 0 || plan.Lifecycle.AfterVersion != 1 {
+	if !ok || s.Operation != assertionScopeOperation(finish, scope) || plan.Feature == nil || plan.Feature.Operation != s.Operation || plan.Feature.Contributor != registrationDescriptor() || plan.Lifecycle == nil || plan.Lifecycle.BeforeVersion != 0 || plan.Lifecycle.AfterVersion != 1 {
 		return webauthn.Invalid{Field: "assertion_parent"}
 	}
 	b := s.Binding
@@ -171,7 +171,7 @@ func validateAssertion(c identity.Command, plan kernel.CommandPlan, scope webaut
 			kind = authorization.SubjectServiceAccount
 		}
 	}
-	if b.CommandID != scope.CommandID || b.TenantID != scope.TenantID || b.UserID != scope.UserID || b.ActorID != actor || b.ActorKind != kind || b.AnonymousFlowID != "" || b.CorrelationID != scope.CorrelationID {
+	if b.CommandID != scope.CommandID || b.TenantID != scope.TenantID || b.UserID != scope.UserID || b.ActorID != actor || b.ActorKind != kind || b.AnonymousFlowID != scope.AnonymousFlowID || b.CorrelationID != scope.CorrelationID {
 		return webauthn.Denied{}
 	}
 	found := false
@@ -209,7 +209,7 @@ func (p *AssertionFinalization) Validate(c identity.Command, plan kernel.Command
 	if p == nil || p.phase == nil {
 		return webauthn.Invalid{Field: "assertion_finalization"}
 	}
-	return validateAssertion(c, plan, p.phase.assertion.Context, p.digest, true, p.preauth)
+	return validateAssertion(c, plan, p.parentContext(), p.digest, true, p.preauth)
 }
 
 // Generate runs once after acknowledged new parent reservation and before Work
@@ -291,7 +291,7 @@ func (p *AssertionFinalization) Apply(ctx context.Context, w kernel.Work, owner 
 	if p == nil || p.phase == nil || p.phase.participantReleased || p.phase.applied {
 		return webauthn.Invalid{Field: "assertion_finalization"}
 	}
-	if err := bindAssertion(ctx, w, owner, c, p.phase, p.digest, p.phase.assertion.Context, true, p.preauth, true); err != nil {
+	if err := bindAssertion(ctx, w, owner, c, p.phase, p.digest, p.parentContext(), true, p.preauth, true); err != nil {
 		return err
 	}
 	if err := p.phase.current(ctx, w); err != nil {
@@ -304,7 +304,7 @@ func (p *AssertionFinalization) Apply(ctx context.Context, w kernel.Work, owner 
 		return err
 	}
 	p.phase.applied = true
-	return checkAssertion(ctx, w, owner, c, p.phase, p.digest, p.phase.assertion.Context, true, p.preauth)
+	return checkAssertion(ctx, w, owner, c, p.phase, p.digest, p.parentContext(), true, p.preauth)
 }
 
 func checkAssertion(ctx context.Context, w kernel.Work, owner kernel.FeatureExecutionContributor, c identity.Command, p *phase, digest [32]byte, scope webauthn.CeremonyContext, finish, preauth bool) error {
@@ -347,7 +347,7 @@ func (p *AssertionFinalization) Check(ctx context.Context, w kernel.Work, owner 
 	if p == nil || p.phase == nil {
 		return webauthn.Invalid{Field: "assertion_finalization"}
 	}
-	return checkAssertion(ctx, w, owner, c, p.phase, p.digest, p.phase.assertion.Context, true, p.preauth)
+	return checkAssertion(ctx, w, owner, c, p.phase, p.digest, p.parentContext(), true, p.preauth)
 }
 
 func assertionResult(p *phase, r identity.CommandResult, finish bool) error {
@@ -363,7 +363,7 @@ func assertionResult(p *phase, r identity.CommandResult, finish bool) error {
 	if !p.applied {
 		return webauthn.Replay{CommandID: r.Binding.CommandID}
 	}
-	if r.Binding != p.binding || r.Feature == nil || r.Feature.Operation != assertionOperation(finish) || r.Feature.BeforeVersion != 0 || r.Feature.AfterVersion != 1 {
+	if r.Binding != p.binding || r.Feature == nil || r.Feature.Operation != assertionScopeOperation(finish, p.ceremony.Intent.Context) || r.Feature.BeforeVersion != 0 || r.Feature.AfterVersion != 1 {
 		return webauthn.Unavailable{}
 	}
 	return nil
@@ -423,9 +423,13 @@ func (s *Store) RecoverAssertion(ctx context.Context, w kernel.RecoveryWork, own
 	if err != nil {
 		return kernel.RecoveryUnknown, err
 	}
-	self := b.ActorKind == authorization.SubjectUser && string(b.ActorID) == string(b.UserID)
-	serviceCreation := f.Operation == assertionOperation(false) && b.ActorKind == authorization.SubjectServiceAccount && b.ActorID != "" && string(b.ActorID) != string(b.UserID)
-	if f.Contributor != registrationDescriptor() || (f.Operation != assertionOperation(false) && f.Operation != assertionOperation(true)) || (!self && !serviceCreation) || b.AnonymousFlowID != "" || l.BeforeVersion != 0 || l.AfterVersion != 1 {
+	self := b.ActorKind == authorization.SubjectUser && b.UserID != "" && string(b.ActorID) == string(b.UserID) && b.AnonymousFlowID == ""
+	serviceCreation := f.Operation == assertionOperation(false) && b.ActorKind == authorization.SubjectServiceAccount && b.UserID != "" && b.ActorID != "" && string(b.ActorID) != string(b.UserID) && b.AnonymousFlowID == ""
+	anonymousOperation := assertionOperation(false)
+	anonymousOperation.SubjectRequirement = identity.FeatureSubjectAnonymousFlow
+	anonymousCreation := f.Operation == anonymousOperation && b.ActorKind == authorization.SubjectServiceAccount && b.UserID == "" && b.ActorID != "" && b.AnonymousFlowID != ""
+	identified := (f.Operation == assertionOperation(false) || f.Operation == assertionOperation(true)) && (self || serviceCreation)
+	if f.Contributor != registrationDescriptor() || (!identified && !anonymousCreation) || l.BeforeVersion != 0 || l.AfterVersion != 1 {
 		return kernel.RecoveryUnknown, webauthn.Denied{}
 	}
 	rows, err := w.Query(ctx, `SELECT 1 FROM webauthn.effects WHERE command_id=$1`, string(b.CommandID))

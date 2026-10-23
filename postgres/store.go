@@ -302,7 +302,9 @@ func (s *Store) LoadDiscoverableCredential(ctx context.Context, q webauthn.Looku
 	ctx, cancel := context.WithTimeout(ctx, s.config().Coordinator.MaximumDuration)
 	defer cancel()
 	var wire []byte
-	e := s.pool.Raw().QueryRow(ctx, `SELECT before_credential FROM webauthn.effects WHERE command_id=$1 AND tenant_id=$2 AND user_id IS NULL AND anonymous_flow_id=$3 AND actor_id=$4 AND purpose='webauthn.assert-discoverable' AND ceremony_id=$5 AND before_credential->>'RPID'=$6`, string(q.Context.CommandID), string(q.Context.TenantID), q.Context.AnonymousFlowID, string(q.Context.ActorID), q.CeremonyID, q.RPID).Scan(&wire)
+	var retainedCeremony []byte
+	var actor, purpose, target string
+	e := s.pool.Raw().QueryRow(ctx, `SELECT before_credential,ceremony,actor_id,purpose,COALESCE(user_id,'') FROM webauthn.effects WHERE command_id=$1 AND tenant_id=$2 AND ceremony_id=$5 AND before_credential->>'RPID'=$6 AND ((purpose='webauthn.assert-discoverable' AND user_id IS NULL AND anonymous_flow_id=$3 AND actor_id=$4) OR (purpose='identity.passkey.signin-verify' AND actor_id=user_id AND anonymous_flow_id IS NULL AND ceremony->'Intent'->'Context'->>'AnonymousFlowID'=$3 AND ceremony->'Intent'->'Context'->>'ActorID'=$4))`, string(q.Context.CommandID), string(q.Context.TenantID), q.Context.AnonymousFlowID, string(q.Context.ActorID), q.CeremonyID, q.RPID).Scan(&wire, &retainedCeremony, &actor, &purpose, &target)
 	if errors.Is(e, pgx.ErrNoRows) {
 		e = s.pool.Raw().QueryRow(ctx, `SELECT c.record FROM webauthn.credentials c JOIN webauthn.user_handles h ON h.rp_id=c.rp_id AND h.user_handle=c.user_handle AND h.tenant_id=c.tenant_id AND h.user_id=c.user_id JOIN webauthn.relying_parties r ON r.rp_id=c.rp_id AND r.tenant_id=c.tenant_id WHERE c.rp_id=$1 AND c.credential_id=$2 AND c.user_handle=$3 AND c.tenant_id=$4`, q.RPID, id, handle, string(q.Context.TenantID)).Scan(&wire)
 	}
@@ -312,6 +314,15 @@ func (s *Store) LoadDiscoverableCredential(ctx context.Context, q webauthn.Looku
 	}
 	if len(wire) > 32768 || json.Unmarshal(wire, &c) != nil || !bytes.Equal(c.ID, id) || !bytes.Equal(c.UserHandle, handle) || c.TenantID != q.Context.TenantID || c.RPID != q.RPID {
 		return webauthn.Credential{}, webauthn.Denied{}
+	}
+	if purpose == "identity.passkey.signin-verify" {
+		// Native finalization belongs to the verified self-human parent, but
+		// retries remain in their original anonymous service/flow. Neither a
+		// caller-selected target nor a JSON actor alone selects that history.
+		var ceremony webauthn.CeremonyRecord
+		if target == "" || actor != target || string(c.UserID) != target || c.Algorithm != int32(webauthn.ES256) || c.Version == 0 || len(retainedCeremony) > 262144 || json.Unmarshal(retainedCeremony, &ceremony) != nil || !discoverableAssertionIntent(ceremony.Intent) || ceremony.ID != q.CeremonyID || ceremony.Intent.RPID != q.RPID || ceremony.Intent.Context.TenantID != q.Context.TenantID || ceremony.Intent.Context.ActorID != q.Context.ActorID || ceremony.Intent.Context.AnonymousFlowID != q.Context.AnonymousFlowID || ceremony.Version == 0 || ceremony.ChallengeDigest == ([32]byte{}) || ceremony.ExpiresAt.IsZero() {
+			return webauthn.Credential{}, webauthn.Denied{}
+		}
 	}
 	return c, nil
 }

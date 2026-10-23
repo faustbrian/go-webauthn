@@ -29,8 +29,21 @@ func (MigrationSource) Load(ctx context.Context) ([]migrations.Migration, error)
 	if e != nil {
 		return nil, webauthn.Unavailable{}
 	}
-	return []migrations.Migration{m, d}, nil
+	p, e := migrations.NewMigration(3, "webauthn_native_discovery_options", migrations.TransactionModeDefault, nativeDiscoverySQL, "")
+	if e != nil {
+		return nil, webauthn.Unavailable{}
+	}
+	return []migrations.Migration{m, d, p}, nil
 }
+
+// Native discovery options share their parent's command and purpose; migration
+// 2 intentionally admits only standalone anonymous protocol effects. Keep that
+// installed history immutable and add only the selected native options purpose.
+const nativeDiscoverySQL = `ALTER TABLE webauthn.effects DROP CONSTRAINT effects_subject_namespace;
+ALTER TABLE webauthn.effects ADD CONSTRAINT effects_subject_namespace CHECK(
+ (user_id IS NOT NULL AND anonymous_flow_id IS NULL) OR
+ (user_id IS NULL AND anonymous_flow_id IS NOT NULL AND purpose IN ('webauthn.begin-get-discoverable','webauthn.assert-discoverable','identity.passkey.signin-options')));
+`
 
 // Existing rows remain identified; old binaries cannot select anonymous NULL
 // subjects. New binaries require this forward migration before activation.

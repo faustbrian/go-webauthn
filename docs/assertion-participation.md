@@ -1,4 +1,4 @@
-# Native identified assertion participation
+# Native assertion participation
 
 The PostgreSQL assertion participant stages protocol persistence inside the
 native passkey owner's existing identity coordinator Work. It does not add a
@@ -14,13 +14,14 @@ schema version 1, a required command record and a 0-to-1 command-record
 lifecycle. The protocol credential retains its independent monotonic version
 and counter transition; those are not the command-record lifecycle.
 
-Only identified existing-account assertions are selected: `get`, a 32-byte
+The identified selectors accept `get`, a 32-byte
 stable handle, an explicit allowed-credential list and ES256. The root service
 always requires UP and UV and uses `none` attestation for enrollment. The
 parent must admit its actual resident-required enrollment profile and mapping;
 assertion input does not itself prove residency or fresh attestation.
-Discoverable signin, signup, credential management, shared-RP tenancy and
-other algorithms remain unsupported by this participant.
+Signup, credential management, shared-RP tenancy and other algorithms remain
+unsupported by these participants. Resident discovery uses the explicit
+anonymous selectors below, not an identified request with omitted checks.
 
 `Store.AssertionCreation` accepts only the root service's opaque
 `CeremonyCreation`; `Store.AssertionFinalization` accepts only its opaque
@@ -43,6 +44,38 @@ The parent separately validates the actual ingress caller, original browser,
 risk evidence and current identity/passkey/session owners. An identified user
 or service actor in a request is not authentication. Neither participant can
 construct verifier custody from a decoded mutation or issue a session itself.
+
+## Account-independent resident discovery
+
+`Store.DiscoverableAssertionCreation` selects the root service's genuine
+`get-discoverable` creation: no user, handle or allowlist, the original trusted
+service actor and a nonempty original anonymous session flow. The native
+signin-options operation retains the same ID/schema/version but explicitly
+sets `SubjectRequirement: identity.FeatureSubjectAnonymousFlow`. Its parent
+binding has empty `UserID` and the exact protocol `AnonymousFlowID`. Creation
+does not query account status or manufacture a decoy identity or credential.
+
+`Store.DiscoverableAssertionFinalization` accepts only the genuine opaque root
+assertion transition. `Before.UserID` supplies the cryptographically resolved
+target; the exact signin-verify parent is self-human with that user and an empty
+parent anonymous flow. Protocol context, service actor and original flow remain
+unchanged in the transition, ceremony and complete digest. The shared native
+helpers consume the original anonymous ceremony and retain current user,
+RP/handle mapping locks and exact credential CAS through final commit.
+
+The parent must select the matching operation in its contributor registry and
+separately bind original browser/identifier/risk/remember policy and current
+identity/passkey/session authority. Resident discovery does not establish that
+the verified credential matches a requested identifier; that comparison occurs
+only inside the owning passkey finalization. These protocol participants do not
+claim signin or session issuance by themselves. Existing identified constructors
+and standalone discoverable storage retain their selected contracts.
+
+Apply forward migration **3** before selecting native discovery options. It
+admits only `identity.passkey.signin-options` as an additional anonymous effect
+purpose, retaining the user/flow exclusivity constraint. Existing migrations 1
+and 2 and their populated identified/anonymous protocol rows remain unchanged;
+old binaries keep their existing query and standalone effect shapes.
 
 ## One original command and one Work
 
@@ -90,13 +123,21 @@ does not consume another proof, change counters, reissue a session, recreate
 options or restore challenge custody.
 
 Recovery admits service-attributed creation only for the exact signin-options
-operation; signin-verify still requires the original self-human parent. An
+operation, including its explicitly anonymous subject profile; signin-verify
+still requires the original self-human parent. An
 exact service-context verification retry can read its original credential
 snapshot only under that command's native signin-verify effect, verified
 target, ceremony/RP and retained original service actor. The bounded retained
 ceremony must match that scope and identified assertion profile. Standalone
 assertion history retains its existing actor-equality rule. This snapshot lets
 the existing coordinator classify replay; it does not recreate authentication.
+
+Resident-discovery retries similarly retain exact original command, tenant,
+ceremony/RP, service actor and anonymous flow. Native history is selected only
+from its self-human signin-verify effect and a bounded complete retained
+discoverable ceremony matching that scope and the verified credential owner.
+Recovery neither changes that anonymous protocol attribution nor remints
+options, challenges, proof, counter transitions or sessions.
 
 The [public native-coordinator fixture](../postgres/assertion_participant_integration_test.go)
 uses real PostgreSQL and a genuinely registered ES256 credential to exercise

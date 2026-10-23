@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Add explicit native resident-discovery assertion participation with anonymous
+  service/flow-attributed options and opaque verified-target finalization under
+  the self-human parent. Original anonymous ceremony consumption, current
+  mapping locks, exact retry history and original-command recovery remain in
+  the parent's sole Work. Identified participants and standalone discovery are
+  unchanged; passkey identifier/risk/session admission stays parent-owned.
+  Apply forward migration 3 before enabling native discovery options; it adds
+  only that anonymous parent purpose and preserves user/flow exclusivity and
+  all existing populated protocol rows.
+
 - Add explicitly selected identified preauthentication assertion participation:
   options retain their trusted ingress service actor through signature
   verification, and only the opaque verified transition binds the final native

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	database "github.com/faustbrian/go-postgres"
 	webauthn "github.com/faustbrian/go-webauthn"
 	webauthnpg "github.com/faustbrian/go-webauthn/postgres"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestDiscoverablePopulatedMigrationPostgres(t *testing.T) {
@@ -39,7 +41,7 @@ func TestDiscoverablePopulatedMigrationPostgres(t *testing.T) {
 		}
 	}
 	history, e = (webauthnpg.MigrationSource{}).Load(ctx)
-	if e != nil || len(history) != 2 {
+	if e != nil || len(history) != 3 {
 		t.Fatal("forward migration history", e)
 	}
 	if _, e = pool.Raw().Exec(ctx, history[0].UpSQL()); e != nil {
@@ -87,5 +89,61 @@ func TestDiscoverablePopulatedMigrationPostgres(t *testing.T) {
 	// These old-binary query shapes still address the same original subjects.
 	if e = pool.Raw().QueryRow(ctx, `SELECT (SELECT count(*) FROM webauthn.ceremonies WHERE user_id='user-a' AND anonymous_flow_id IS NULL),(SELECT count(*) FROM webauthn.effects WHERE user_id='user-a' AND anonymous_flow_id IS NULL)`).Scan(&identifiedCeremonies, &identifiedEffects); e != nil || identifiedCeremonies != 1 || identifiedEffects != 1 {
 		t.Fatal("migration lost identified history", e)
+	}
+	anonymous := ceremony
+	anonymous.Intent.Context.CommandID, _ = identity.NewCommandID()
+	anonymous.ID = string(anonymous.Intent.Context.CommandID)
+	anonymous.Intent.Context.UserID, anonymous.Intent.Context.AnonymousFlowID = "", "original-populated-flow"
+	anonymous.Intent.Kind, anonymous.Intent.UserHandle, anonymous.Intent.AllowedCredentials = "get-discoverable", nil, nil
+	anonymousWire, _ := json.Marshal(anonymous)
+	if _, e = pool.Raw().Exec(ctx, `INSERT INTO webauthn.ceremonies(ceremony_id,rp_id,tenant_id,user_id,kind,challenge_digest,expires_at,version,record,anonymous_flow_id) VALUES($1,'example.com','tenant-a',NULL,'get-discoverable',$2,$3,1,$4::jsonb,'original-populated-flow')`, anonymous.ID, anonymous.ChallengeDigest[:], anonymous.ExpiresAt, string(anonymousWire)); e != nil {
+		t.Fatal("populate migration 2 anonymous ceremony", e)
+	}
+	insertEffect := func(purpose, user, flow string) error {
+		command, err := identity.NewCommandID()
+		if err != nil {
+			return err
+		}
+		_, err = pool.Raw().Exec(ctx, `INSERT INTO webauthn.effects(command_id,tenant_id,user_id,actor_id,purpose,record_id,fingerprint,ceremony_id,ceremony,anonymous_flow_id) VALUES($1,'tenant-a',NULLIF($2,''),'actor-a',$3,'native-options',$4,$5,$6::jsonb,NULLIF($7,''))`, string(command), user, purpose, anonymous.ChallengeDigest[:], anonymous.ID, string(anonymousWire), flow)
+		return err
+	}
+	for _, purpose := range []string{"webauthn.begin-get-discoverable", "webauthn.assert-discoverable"} {
+		if e = insertEffect(purpose, "", "original-populated-flow"); e != nil {
+			t.Fatal("populate original anonymous protocol effect", e)
+		}
+	}
+	requireSubjectRejection := func(err error) {
+		t.Helper()
+		var constraint *pgconn.PgError
+		if !errors.As(err, &constraint) || constraint.Code != "23514" || constraint.ConstraintName != "effects_subject_namespace" {
+			t.Fatal("expected exact subject namespace constraint rejection", err)
+		}
+	}
+	// This is the actual old-schema boundary that prevented native options.
+	requireSubjectRejection(insertEffect("identity.passkey.signin-options", "", "original-populated-flow"))
+	snapshot := func() [3]string {
+		var rows [3]string
+		if e := pool.Raw().QueryRow(ctx, `SELECT (SELECT jsonb_agg(to_jsonb(c) ORDER BY ceremony_id)::text FROM webauthn.ceremonies c),(SELECT jsonb_agg(to_jsonb(e) ORDER BY command_id)::text FROM webauthn.effects e),(SELECT jsonb_agg(to_jsonb(c) ORDER BY credential_id)::text FROM webauthn.credentials c)`).Scan(&rows[0], &rows[1], &rows[2]); e != nil {
+			t.Fatal(e)
+		}
+		return rows
+	}
+	prior := snapshot()
+	if _, e = pool.Raw().Exec(ctx, history[2].UpSQL()); e != nil {
+		t.Fatal("populated native options migration", e)
+	}
+	if snapshot() != prior {
+		t.Fatal("migration 3 changed populated original protocol rows")
+	}
+	for _, purpose := range []string{"webauthn.begin-get-discoverable", "webauthn.assert-discoverable", "identity.passkey.signin-options"} {
+		if e = insertEffect(purpose, "", "original-populated-flow"); e != nil {
+			t.Fatal("migration 3 rejected supported anonymous purpose", purpose, e)
+		}
+	}
+	for _, purpose := range []string{"identity.passkey.signin-verify", "identity.passkey.register-options", "webauthn.begin-create", "unsupported.purpose"} {
+		requireSubjectRejection(insertEffect(purpose, "", "original-populated-flow"))
+	}
+	for _, subject := range [][2]string{{"user-a", "original-populated-flow"}, {"", ""}} {
+		requireSubjectRejection(insertEffect("identity.passkey.signin-options", subject[0], subject[1]))
 	}
 }
