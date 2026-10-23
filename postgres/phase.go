@@ -26,6 +26,7 @@ type phase struct {
 	ceremony      webauthn.CeremonyRecord
 	challenge     webauthn.Challenge
 	applied       bool
+	signupFlow    string
 	// Composed registration aliases share reveal/generation state. The owning
 	// native invocation is serial, just like the generation-bound Work itself.
 	participantGenerated, participantReleased bool
@@ -53,7 +54,15 @@ func (p *phase) ValidateFeatureCommand(c identity.Command, plan kernel.CommandPl
 }
 func (p *phase) current(ctx context.Context, w kernel.Work) error {
 	user := p.binding.UserID
-	discoverable := p.binding.AnonymousFlowID != "" || p.assertion != nil && p.assertion.Ceremony.Intent.Kind == "get-discoverable"
+	if p.signupFlow != "" {
+		if p.registration == nil {
+			// A pending registration is not an authenticated account. The
+			// native owner's prospective creation will claim this ID at verify.
+			return nil
+		}
+		user = p.registration.Context.UserID
+	}
+	discoverable := p.signupFlow == "" && (p.binding.AnonymousFlowID != "" || p.assertion != nil && p.assertion.Ceremony.Intent.Kind == "get-discoverable")
 	if discoverable {
 		if p.creation != nil {
 			return nil
@@ -158,44 +167,52 @@ func (p *phase) applyCreation(ctx context.Context, w kernel.Work) error {
 	if tenant != string(i.Context.TenantID) {
 		return identity.ForbiddenError{}
 	}
-	if i.Kind != "get-discoverable" {
-		if _, e = w.Exec(ctx, `INSERT INTO webauthn.user_handles(rp_id,user_handle,tenant_id,user_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, i.RPID, i.UserHandle, string(i.Context.TenantID), string(i.Context.UserID)); e != nil {
+	if i.Kind != "get-discoverable" && p.signupFlow == "" {
+		if e = p.bindRegistrationHandle(ctx, w); e != nil {
 			return e
-		}
-		rows, e = w.Query(ctx, `SELECT tenant_id,user_id FROM webauthn.user_handles WHERE rp_id=$1 AND user_handle=$2`, i.RPID, i.UserHandle)
-		if e != nil {
-			return e
-		}
-		var user string
-		if !rows.Next() {
-			rows.Close()
-			return identity.ConflictError{}
-		}
-		e = rows.Scan(&tenant, &user)
-		if rows.Next() {
-			e = identity.UnavailableError{}
-		}
-		rowerr = rows.Err()
-		rows.Close()
-		if e != nil {
-			return e
-		}
-		if rowerr != nil {
-			return rowerr
-		}
-		if tenant != string(i.Context.TenantID) || user != string(i.Context.UserID) {
-			return identity.ConflictError{}
 		}
 	}
 	wire, e := json.Marshal(r)
 	if e != nil {
 		return identity.InvalidInputError{Field: "ceremony"}
 	}
-	n, e := w.Exec(ctx, `INSERT INTO webauthn.ceremonies(ceremony_id,rp_id,tenant_id,user_id,kind,challenge_digest,expires_at,version,record,anonymous_flow_id) VALUES($1,$2,$3,NULLIF($4,''),$5,$6,$7,1,$8::jsonb,NULLIF($9,'')) ON CONFLICT DO NOTHING`, r.ID, i.RPID, string(i.Context.TenantID), string(i.Context.UserID), i.Kind, r.ChallengeDigest[:], r.ExpiresAt, string(wire), i.Context.AnonymousFlowID)
+	user, prospective := string(i.Context.UserID), ""
+	if p.signupFlow != "" {
+		user, prospective = "", user
+	}
+	n, e := w.Exec(ctx, `INSERT INTO webauthn.ceremonies(ceremony_id,rp_id,tenant_id,user_id,kind,challenge_digest,expires_at,version,record,anonymous_flow_id,signup_user_id,signup_flow_id) VALUES($1,$2,$3,NULLIF($4,''),$5,$6,$7,1,$8::jsonb,NULLIF($9,''),NULLIF($10,''),NULLIF($11,'')) ON CONFLICT DO NOTHING`, r.ID, i.RPID, string(i.Context.TenantID), user, i.Kind, r.ChallengeDigest[:], r.ExpiresAt, string(wire), i.Context.AnonymousFlowID, prospective, p.signupFlow)
 	if e != nil {
 		return e
 	}
 	if n != 1 {
+		return identity.ConflictError{}
+	}
+	return nil
+}
+func (p *phase) bindRegistrationHandle(ctx context.Context, w kernel.Work) error {
+	i := p.ceremony.Intent
+	if _, err := w.Exec(ctx, `INSERT INTO webauthn.user_handles(rp_id,user_handle,tenant_id,user_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, i.RPID, i.UserHandle, string(i.Context.TenantID), string(i.Context.UserID)); err != nil {
+		return err
+	}
+	rows, err := w.Query(ctx, `SELECT tenant_id,user_id FROM webauthn.user_handles WHERE rp_id=$1 AND user_handle=$2`, i.RPID, i.UserHandle)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var tenant, user string
+	if !rows.Next() {
+		return identity.ConflictError{}
+	}
+	if err = rows.Scan(&tenant, &user); err != nil {
+		return err
+	}
+	if rows.Next() {
+		return identity.UnavailableError{}
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	if tenant != string(i.Context.TenantID) || user != string(i.Context.UserID) {
 		return identity.ConflictError{}
 	}
 	return nil
@@ -213,7 +230,14 @@ func (p *phase) consume(ctx context.Context, w kernel.Work) error {
 	if e != nil {
 		return identity.InvalidInputError{Field: "ceremony"}
 	}
-	n, e := w.Exec(ctx, `UPDATE webauthn.ceremonies SET consumed_by=$1 WHERE ceremony_id=$2 AND tenant_id=$3 AND COALESCE(user_id,'')=$4 AND rp_id=$5 AND consumed_by IS NULL AND expires_at>clock_timestamp() AND version=1 AND record=$6::jsonb AND COALESCE(anonymous_flow_id,'')=$7`, string(p.binding.CommandID), r.ID, string(p.binding.TenantID), string(user), r.Intent.RPID, string(wire), flow)
+	query := `UPDATE webauthn.ceremonies SET consumed_by=$1 WHERE ceremony_id=$2 AND tenant_id=$3 AND COALESCE(user_id,'')=$4 AND rp_id=$5 AND consumed_by IS NULL AND expires_at>clock_timestamp() AND version=1 AND record=$6::jsonb AND COALESCE(anonymous_flow_id,'')=$7 AND signup_flow_id IS NULL AND signup_user_id IS NULL`
+	if p.signupFlow != "" {
+		user, flow = r.Intent.Context.UserID, p.signupFlow
+		// Only this exact verified pending ceremony can gain its real FK-backed
+		// user association. Neither retries nor generic protocol calls promote it.
+		query = `UPDATE webauthn.ceremonies SET consumed_by=$1,user_id=signup_user_id,signup_user_id=NULL WHERE ceremony_id=$2 AND tenant_id=$3 AND user_id IS NULL AND signup_user_id=$4 AND rp_id=$5 AND consumed_by IS NULL AND expires_at>clock_timestamp() AND version=1 AND record=$6::jsonb AND signup_flow_id=$7 AND anonymous_flow_id IS NULL AND kind='create'`
+	}
+	n, e := w.Exec(ctx, query, string(p.binding.CommandID), r.ID, string(p.binding.TenantID), string(user), r.Intent.RPID, string(wire), flow)
 	if e != nil {
 		return e
 	}
@@ -225,6 +249,11 @@ func (p *phase) consume(ctx context.Context, w kernel.Work) error {
 func (p *phase) applyRegistration(ctx context.Context, w kernel.Work) error {
 	if e := p.consume(ctx, w); e != nil {
 		return e
+	}
+	if p.signupFlow != "" {
+		if e := p.bindRegistrationHandle(ctx, w); e != nil {
+			return e
+		}
 	}
 	c := p.registration.Credential
 	wire, e := json.Marshal(c)

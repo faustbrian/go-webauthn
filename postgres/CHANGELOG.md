@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Add explicit anonymous-flow registration participation for the passkey
+  `.signup-v1` parent using real root-issued resident-required UV/ES256
+  transitions. Pending options create no identity, stable user handle or
+  credential. Verification binds the original stored flow and prospective
+  user, promotes its ceremony association once, and inserts the handle and
+  credential in the parent's sole transaction after parent-owned identity
+  creation. Risk, signup authority, MFA and sessions stay parent-owned;
+  existing self-user enrollment is unchanged. Install forward migration 4
+  before using this adapter revision, including retained enrollment/discovery;
+  populated history and old-binary schema access remain compatible.
+
 - Add native self-user credential removal participation in the existing
   passkey delete parent's sole transaction. Exact optimistic protocol state is
   replaced by a key-erased, versioned terminal row; RP-wide credential and

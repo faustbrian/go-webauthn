@@ -20,8 +20,10 @@ const registrationField = "webauthn.registration.intent"
 // RegistrationCreation is one serial-use native protocol participant borrowed
 // by the selected passkey register-options owner. Copies must not be used
 // concurrently. It never reserves, begins, commits or retains Work. The parent
-// must independently admit current session, fresh proof, factor/risk policy and
-// identity mapping in that same Work. Zero values deny; no goroutine is owned.
+// must independently admit current session/fresh proof for enrollment, or the
+// original pre-auth/signup authority for signup, plus applicable factor/risk
+// policy and identity mapping in that same Work. Zero values deny; no goroutine
+// is owned.
 type RegistrationCreation struct {
 	phase  *phase
 	input  webauthn.CeremonyCreation
@@ -119,17 +121,39 @@ func registrationOperation(finish bool) identity.FeatureOperation {
 func registrationDescriptor() kernel.ContributorDescriptor {
 	return kernel.ContributorDescriptor{Owner: "passkey/postgres", ContractID: "identity.passkey", Version: 1}
 }
-func validateRegistration(c identity.Command, p kernel.CommandPlan, scope webauthn.CeremonyContext, digest [32]byte, finish bool) error {
+func registrationScopeOperation(finish bool, signupFlow string) identity.FeatureOperation {
+	op := registrationOperation(finish)
+	if signupFlow != "" {
+		op.SchemaID = op.OperationID + ".signup-v1"
+		op.SubjectRequirement = identity.FeatureSubjectAnonymousFlow
+	}
+	return op
+}
+func validateRegistration(c identity.Command, p kernel.CommandPlan, scope webauthn.CeremonyContext, digest [32]byte, finish bool, signupFlow string) error {
 	s, ok := c.Feature()
-	if !ok || s.Operation != registrationOperation(finish) || p.Feature == nil || p.Feature.Operation != s.Operation || p.Feature.Contributor != registrationDescriptor() || p.Lifecycle == nil || p.Lifecycle.BeforeVersion != 0 || p.Lifecycle.AfterVersion != 1 {
+	if !ok || s.Operation != registrationScopeOperation(finish, signupFlow) || p.Feature == nil || p.Feature.Operation != s.Operation || p.Feature.Contributor != registrationDescriptor() || p.Lifecycle == nil || p.Lifecycle.BeforeVersion != 0 || p.Lifecycle.AfterVersion != 1 {
 		return webauthn.Invalid{Field: "registration_parent"}
 	}
 	b := s.Binding
-	if b.CommandID != scope.CommandID || b.TenantID != scope.TenantID || b.UserID != scope.UserID || b.ActorID != scope.ActorID || b.ActorKind != authorization.SubjectUser || b.AnonymousFlowID != "" || b.CorrelationID != scope.CorrelationID {
+	if b.CommandID != scope.CommandID || b.TenantID != scope.TenantID || b.ActorID != scope.ActorID || b.CorrelationID != scope.CorrelationID {
+		return webauthn.Denied{}
+	}
+	if signupFlow == "" {
+		if b.UserID != scope.UserID || b.ActorKind != authorization.SubjectUser || b.AnonymousFlowID != "" {
+			return webauthn.Denied{}
+		}
+	} else if b.UserID != "" || b.ActorKind != authorization.SubjectServiceAccount || b.AnonymousFlowID != signupFlow {
 		return webauthn.Denied{}
 	}
 	found := false
+	prospective := false
 	for _, field := range s.Fields {
+		if signupFlow != "" && field.Name == "registration.user" {
+			if prospective || field.Value.Kind != identity.FeatureText || field.Value.Text != string(scope.UserID) {
+				return webauthn.Invalid{Field: "registration_user"}
+			}
+			prospective = true
+		}
 		if !strings.HasPrefix(field.Name, "webauthn.") {
 			continue
 		}
@@ -138,7 +162,7 @@ func validateRegistration(c identity.Command, p kernel.CommandPlan, scope webaut
 		}
 		found = true
 	}
-	if !found {
+	if !found || signupFlow != "" && !prospective {
 		return webauthn.Invalid{Field: "registration_intent"}
 	}
 	return nil
@@ -154,7 +178,7 @@ func (p *RegistrationCreation) Validate(c identity.Command, plan kernel.CommandP
 	if err != nil {
 		return err
 	}
-	return validateRegistration(c, plan, i.Context, p.digest, false)
+	return validateRegistration(c, plan, i.Context, p.digest, false, p.phase.signupFlow)
 }
 
 // Validate requires the exact selected parent, immutable verifier transition
@@ -163,7 +187,7 @@ func (p *RegistrationFinalization) Validate(c identity.Command, plan kernel.Comm
 	if p == nil || p.phase == nil {
 		return webauthn.Invalid{Field: "registration_finalization"}
 	}
-	return validateRegistration(c, plan, p.phase.registration.Context, p.digest, true)
+	return validateRegistration(c, plan, p.phase.registration.Context, p.digest, true, p.phase.signupFlow)
 }
 
 // Generate must run after acknowledged parent reservation and before Work opens.
@@ -195,7 +219,7 @@ func bindRegistration(ctx context.Context, w kernel.Work, owner kernel.FeatureEx
 	if err != nil {
 		return err
 	}
-	if err = validateRegistration(c, kernel.CommandPlan{Feature: &f, Lifecycle: &l}, scope, digest, finish); err != nil {
+	if err = validateRegistration(c, kernel.CommandPlan{Feature: &f, Lifecycle: &l}, scope, digest, finish, p.signupFlow); err != nil {
 		return err
 	}
 	if !apply {
@@ -271,6 +295,11 @@ func checkRegistration(ctx context.Context, w kernel.Work, owner kernel.FeatureE
 	if err := p.current(ctx, w); err != nil {
 		return err
 	}
+	if p.signupFlow != "" {
+		if err := p.checkSignupCeremony(ctx, w, finish); err != nil {
+			return err
+		}
+	}
 	now, err := w.DatabaseTime(ctx)
 	if err != nil {
 		return err
@@ -281,8 +310,9 @@ func checkRegistration(ctx context.Context, w kernel.Work, owner kernel.FeatureE
 	return nil
 }
 
-// Check repeats protocol current-user and absolute-expiry fences in the parent's
-// final precommit invocation. Parent session/proof/risk fences remain required.
+// Check repeats the selected protocol current-user or original pending-signup
+// scope and absolute-expiry fences in the parent's final precommit invocation.
+// Parent session/proof/pre-auth/risk fences remain required as applicable.
 func (p *RegistrationCreation) Check(ctx context.Context, w kernel.Work, owner kernel.FeatureExecutionContributor, c identity.Command) error {
 	if p == nil || p.phase == nil {
 		return webauthn.Invalid{Field: "registration_creation"}
@@ -315,7 +345,7 @@ func registrationResult(p *phase, r identity.CommandResult, finish bool) error {
 	if !p.applied {
 		return webauthn.Replay{CommandID: r.Binding.CommandID}
 	}
-	if r.Binding != p.binding || r.Feature == nil || r.Feature.Operation != registrationOperation(finish) || r.Feature.BeforeVersion != 0 || r.Feature.AfterVersion != 1 {
+	if r.Binding != p.binding || r.Feature == nil || r.Feature.Operation != registrationScopeOperation(finish, p.signupFlow) || r.Feature.BeforeVersion != 0 || r.Feature.AfterVersion != 1 {
 		return webauthn.Unavailable{}
 	}
 	return nil
@@ -373,7 +403,9 @@ func (s *Store) RecoverRegistration(ctx context.Context, w kernel.RecoveryWork, 
 	if err != nil {
 		return kernel.RecoveryUnknown, err
 	}
-	if f.Contributor != registrationDescriptor() || (f.Operation != registrationOperation(false) && f.Operation != registrationOperation(true)) || b.ActorKind != authorization.SubjectUser || string(b.ActorID) != string(b.UserID) {
+	native := (f.Operation == registrationOperation(false) || f.Operation == registrationOperation(true)) && b.ActorKind == authorization.SubjectUser && b.UserID != "" && string(b.ActorID) == string(b.UserID) && b.AnonymousFlowID == ""
+	signup := (f.Operation == registrationScopeOperation(false, "signup") || f.Operation == registrationScopeOperation(true, "signup")) && b.ActorKind == authorization.SubjectServiceAccount && b.ActorID != "" && b.UserID == "" && b.AnonymousFlowID != ""
+	if f.Contributor != registrationDescriptor() || !native && !signup {
 		return kernel.RecoveryUnknown, webauthn.Denied{}
 	}
 	rows, err := w.Query(ctx, `SELECT 1 FROM webauthn.effects WHERE command_id=$1`, string(b.CommandID))

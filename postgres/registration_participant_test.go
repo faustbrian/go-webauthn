@@ -19,6 +19,12 @@ func TestRegistrationParticipationInvalidCustody(t *testing.T) {
 	if p, err := store.RegistrationFinalization(webauthn.RegistrationTransition{}); err == nil || p != nil {
 		t.Fatal("zero store/verified transition accepted")
 	}
+	if p, err := store.SignupRegistrationCreation(webauthn.CeremonyCreation{}, "original-flow"); err == nil || p != nil {
+		t.Fatal("zero signup creation accepted")
+	}
+	if p, err := store.SignupRegistrationFinalization(webauthn.RegistrationTransition{}, "original-flow"); err == nil || p != nil {
+		t.Fatal("zero signup verification accepted")
+	}
 	var creation webauthnpg.RegistrationCreation
 	if _, err := creation.Fields(); err == nil {
 		t.Fatal("zero creation supplied command fields")

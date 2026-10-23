@@ -33,8 +33,30 @@ func (MigrationSource) Load(ctx context.Context) ([]migrations.Migration, error)
 	if e != nil {
 		return nil, webauthn.Unavailable{}
 	}
-	return []migrations.Migration{m, d, p}, nil
+	s, e := migrations.NewMigration(4, "webauthn_signup_registration", migrations.TransactionModeDefault, signupRegistrationSQL, "")
+	if e != nil {
+		return nil, webauthn.Unavailable{}
+	}
+	return []migrations.Migration{m, d, p, s}, nil
 }
+
+// Pending signup has no identity to reference. Keep the existing user FK and
+// anonymous-discovery namespace intact; a verified one-use update alone promotes
+// the prospective ID to the real user association, retaining the original flow.
+const signupRegistrationSQL = `ALTER TABLE webauthn.ceremonies ADD COLUMN signup_user_id identity.directory_id;
+ALTER TABLE webauthn.ceremonies ADD COLUMN signup_flow_id identity.directory_id;
+ALTER TABLE webauthn.ceremonies DROP CONSTRAINT ceremonies_subject_kind;
+ALTER TABLE webauthn.ceremonies ADD CONSTRAINT ceremonies_subject_kind CHECK(
+ (kind IN ('create','get') AND user_id IS NOT NULL AND anonymous_flow_id IS NULL AND signup_user_id IS NULL AND signup_flow_id IS NULL) OR
+ (kind='get-discoverable' AND user_id IS NULL AND anonymous_flow_id IS NOT NULL AND signup_user_id IS NULL AND signup_flow_id IS NULL) OR
+ (kind='create' AND anonymous_flow_id IS NULL AND signup_flow_id IS NOT NULL AND
+  ((user_id IS NULL AND signup_user_id IS NOT NULL AND consumed_by IS NULL) OR
+   (user_id IS NOT NULL AND signup_user_id IS NULL AND consumed_by IS NOT NULL))));
+ALTER TABLE webauthn.effects DROP CONSTRAINT effects_subject_namespace;
+ALTER TABLE webauthn.effects ADD CONSTRAINT effects_subject_namespace CHECK(
+ (user_id IS NOT NULL AND anonymous_flow_id IS NULL) OR
+ (user_id IS NULL AND anonymous_flow_id IS NOT NULL AND purpose IN ('webauthn.begin-get-discoverable','webauthn.assert-discoverable','identity.passkey.signin-options','identity.passkey.register-options','identity.passkey.register-verify')));
+`
 
 // Native discovery options share their parent's command and purpose; migration
 // 2 intentionally admits only standalone anonymous protocol effects. Keep that

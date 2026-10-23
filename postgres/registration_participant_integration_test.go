@@ -36,13 +36,21 @@ type registrationOwner struct {
 	finalization                   *webauthnpg.RegistrationFinalization
 	store                          *webauthnpg.Store
 	failApply, failCommit, foreign bool
+	signupFlow                     string
+	tamperSignup                   string
 }
 
 func (*registrationOwner) Descriptor() kernel.ContributorDescriptor {
 	return kernel.ContributorDescriptor{Owner: "passkey/postgres", ContractID: "identity.passkey", Version: 1}
 }
 func (*registrationOwner) FeatureOperations() []identity.FeatureOperation {
-	return []identity.FeatureOperation{registrationOperation(false), registrationOperation(true)}
+	return []identity.FeatureOperation{registrationOperation(false), registrationOperation(true), signupRegistrationOperation(false), signupRegistrationOperation(true)}
+}
+func signupRegistrationOperation(finish bool) identity.FeatureOperation {
+	op := registrationOperation(finish)
+	op.SchemaID = op.OperationID + ".signup-v1"
+	op.SubjectRequirement = identity.FeatureSubjectAnonymousFlow
+	return op
 }
 func registrationOperation(finish bool) identity.FeatureOperation {
 	name := "identity.passkey.register-options"
@@ -69,6 +77,18 @@ func (p *registrationOwner) ApplyFeature(ctx context.Context, w kernel.Work, c i
 		owner = &registrationOwner{}
 	}
 	var err error
+	if p.signupFlow != "" && p.finalization != nil {
+		// This protocol-only consumer stands in for the parent-owned creation
+		// effect, not for the native identity creation API or signup authority.
+		spec, _ := c.Feature()
+		for _, field := range spec.Fields {
+			if field.Name == "registration.user" {
+				if _, err = w.Exec(ctx, `INSERT INTO identity.users(tenant_id,user_id,status,version) VALUES($1,$2,'active',1)`, string(spec.Binding.TenantID), field.Value.Text); err != nil {
+					return identity.FeatureReceipt{}, err
+				}
+			}
+		}
+	}
 	if p.creation != nil {
 		err = p.creation.Apply(ctx, w, owner, c)
 	} else {
@@ -94,6 +114,21 @@ func (p *registrationOwner) CheckFeatureCommit(ctx context.Context, w kernel.Wor
 	if p.failCommit {
 		return identity.ForbiddenError{}
 	}
+	if p.finalization != nil && p.tamperSignup != "" {
+		b, _, _, err := w.FeatureScope(p)
+		if err != nil {
+			return err
+		}
+		switch p.tamperSignup {
+		case "flow-fence":
+			_, err = w.Exec(ctx, `UPDATE webauthn.ceremonies SET signup_flow_id='changed-before-final-check' WHERE consumed_by=$1`, string(b.CommandID))
+		case "active-fence":
+			_, err = w.Exec(ctx, `UPDATE identity.users SET status='suspended' WHERE tenant_id=$1 AND user_id='prospective-user'`, string(b.TenantID))
+		}
+		if err != nil {
+			return err
+		}
+	}
 	if p.creation != nil {
 		return p.creation.Check(ctx, w, p, c)
 	}
@@ -109,6 +144,8 @@ type registrationStore struct {
 	config                         kernel.CoordinatorConfig
 	failApply, failCommit, foreign bool
 	invalidParent                  string
+	signupFlow                     string
+	tamperSignup                   string
 }
 
 func (s *registrationStore) coordinator(p *registrationOwner) (*kernel.Coordinator, *kernel.ContributorRegistry, error) {
@@ -135,6 +172,12 @@ func (s *registrationStore) coordinator(p *registrationOwner) (*kernel.Coordinat
 func (s *registrationStore) execute(ctx context.Context, p *registrationOwner, scope webauthn.CeremonyContext, fields []identity.FeatureField) (identity.CommandResult, error) {
 	op := registrationOperation(p.finalization != nil)
 	b := identity.CommandBinding{CommandID: scope.CommandID, TenantID: scope.TenantID, UserID: scope.UserID, ActorID: scope.ActorID, ActorKind: authorization.SubjectUser, OperationID: op.OperationID, SchemaID: op.SchemaID, SchemaVersion: 1, PolicyID: "participation-test", PolicyVersion: 1, CorrelationID: scope.CorrelationID, RecordID: string(scope.CommandID)}
+	if s.signupFlow != "" {
+		op = signupRegistrationOperation(p.finalization != nil)
+		b.SchemaID, b.UserID, b.AnonymousFlowID, b.ActorKind = op.SchemaID, "", s.signupFlow, authorization.SubjectServiceAccount
+		fields = append(fields, identity.FeatureField{Name: "registration.user", Value: identity.FeatureValue{Kind: identity.FeatureText, Text: string(scope.UserID)}})
+		p.signupFlow = s.signupFlow
+	}
 	// Both mutations remain valid root commands. Keep the real opaque protocol
 	// input unchanged, so only the participant's original-intent guard can deny
 	// them; no foreign owner, malformed command or incidental SQL mismatch helps.
@@ -144,18 +187,42 @@ func (s *registrationStore) execute(ctx context.Context, p *registrationOwner, s
 	case "intent":
 		fields[0].Value.Bytes = bytes.Clone(fields[0].Value.Bytes)
 		fields[0].Value.Bytes[0] ^= 1
+	case "actor":
+		b.ActorID = "other-signup-service"
+	case "flow":
+		b.AnonymousFlowID = "other-parent-flow"
+	case "pending-user":
+		fields[len(fields)-1].Value.Text = "other-prospective-user"
+	case "missing-user":
+		fields = fields[:len(fields)-1]
+	case "typed-user":
+		fields[len(fields)-1].Value = identity.FeatureValue{Kind: identity.FeatureBytes, Bytes: []byte("prospective-user")}
+	case "command":
+		b.CommandID, _ = identity.NewCommandID()
+	case "schema":
+		op.SchemaID = op.OperationID + ".unselected-v1"
+		b.SchemaID = op.SchemaID
+	case "mixed-user":
+		b.UserID = scope.UserID
+	case "actor-kind":
+		b.ActorKind = authorization.SubjectUser
 	}
 	c, err := identity.NewFeatureCommand(identity.FeatureCommandSpec{Binding: b, Operation: op, Fields: fields})
 	if err != nil {
 		return identity.CommandResult{}, err
 	}
 	p.command, p.store, p.failApply, p.failCommit, p.foreign = c, s.Store, s.failApply, s.failCommit, s.foreign
+	p.tamperSignup = s.tamperSignup
 	coordinator, r, err := s.coordinator(p)
 	if err != nil {
 		return identity.CommandResult{}, err
 	}
 	builder, _ := audit.NewBuilder(audit.BuilderConfig{})
-	seed, err := builder.Build(audit.RecordInput{OccurredAt: time.Now().UTC().Truncate(time.Microsecond), Action: op.OperationID, Outcome: audit.OutcomeSucceeded, Actor: audit.ActorInput{Kind: audit.ActorHuman, ID: string(b.ActorID)}, Subject: audit.SubjectInput{Type: "passkey", ID: b.RecordID}, Context: audit.ContextInput{TenantID: string(b.TenantID), CorrelationID: b.CorrelationID}, Policy: audit.PolicyMetadata{PolicyID: b.PolicyID, Version: "1"}, Changes: audit.ChangeSetInput{Redacted: true}, Attributes: map[string]string{"command.id": string(b.CommandID), "aggregate.type": "passkey", "aggregate.id": b.RecordID, "aggregate.before_version": "0", "aggregate.after_version": "1", "retention.class": "protected"}})
+	actorKind := audit.ActorHuman
+	if s.signupFlow != "" {
+		actorKind = audit.ActorService
+	}
+	seed, err := builder.Build(audit.RecordInput{OccurredAt: time.Now().UTC().Truncate(time.Microsecond), Action: op.OperationID, Outcome: audit.OutcomeSucceeded, Actor: audit.ActorInput{Kind: actorKind, ID: string(b.ActorID)}, Subject: audit.SubjectInput{Type: "passkey", ID: b.RecordID}, Context: audit.ContextInput{TenantID: string(b.TenantID), CorrelationID: b.CorrelationID}, Policy: audit.PolicyMetadata{PolicyID: b.PolicyID, Version: "1"}, Changes: audit.ChangeSetInput{Redacted: true}, Attributes: map[string]string{"command.id": string(b.CommandID), "aggregate.type": "passkey", "aggregate.id": b.RecordID, "aggregate.before_version": "0", "aggregate.after_version": "1", "retention.class": "protected"}})
 	if err != nil {
 		return identity.CommandResult{}, err
 	}
@@ -206,11 +273,19 @@ func (s *registrationStore) Recover(ctx context.Context, r webauthn.RecoveryRequ
 	op := registrationOperation(r.Operation == webauthn.RegistrationOperation)
 	q := identity.RecoveryQuery{CommandID: r.Context.CommandID, TenantID: r.Context.TenantID, UserID: r.Context.UserID, ActorID: r.Context.ActorID, ActorKind: authorization.SubjectUser, OperationID: op.OperationID, RecordID: string(r.Context.CommandID)}
 	caller := authorization.DecisionContext{PolicyRevision: 1, Request: authorization.Request{Subject: authorization.Subject{ID: authorization.SubjectID(q.ActorID), Kind: q.ActorKind}, Tenant: authorization.TenantID(q.TenantID), Action: authorization.Action(q.OperationID), Resource: authorization.Resource{Type: "identity.user", ID: authorization.ResourceID(q.UserID)}}}
+	if s.signupFlow != "" {
+		q.UserID, q.AnonymousFlowID, q.ActorKind = "", s.signupFlow, authorization.SubjectServiceAccount
+		caller.Request.Subject.Kind = q.ActorKind
+		caller.Request.Resource.Type, caller.Request.Resource.ID = "identity.anonymous-flow", authorization.ResourceID(s.signupFlow)
+	}
 	result, err := coordinator.RecoverCommand(ctx, q, caller)
 	return result.Outcome, err
 }
 func (s *registrationStore) CreateCeremony(ctx context.Context, c webauthn.CeremonyCreation) (webauthn.CeremonyRecord, webauthn.Challenge, identity.CommitOutcome, error) {
 	p, err := s.Store.RegistrationCreation(c)
+	if s.signupFlow != "" {
+		p, err = s.Store.SignupRegistrationCreation(c, s.signupFlow)
+	}
 	if err != nil {
 		return webauthn.CeremonyRecord{}, webauthn.Challenge{}, identity.CommitOutcomeInvalid, err
 	}
@@ -226,6 +301,9 @@ func (s *registrationStore) CreateCeremony(ctx context.Context, c webauthn.Cerem
 }
 func (s *registrationStore) FinalizeRegistration(ctx context.Context, t webauthn.RegistrationTransition) (webauthn.Credential, identity.CommitOutcome, error) {
 	p, err := s.Store.RegistrationFinalization(t)
+	if s.signupFlow != "" {
+		p, err = s.Store.SignupRegistrationFinalization(t, s.signupFlow)
+	}
 	if err != nil {
 		return webauthn.Credential{}, identity.CommitOutcomeInvalid, err
 	}
@@ -237,6 +315,191 @@ func (s *registrationStore) FinalizeRegistration(ctx context.Context, t webauthn
 		return webauthn.Credential{}, result.Outcome, runErr
 	}
 	return credential, result.Outcome, err
+}
+
+func TestSignupRegistrationParticipationPostgres(t *testing.T) {
+	ctx, pool, config, native := nativeFixture(t)
+	if _, err := pool.Raw().Exec(ctx, `CREATE TABLE participation_metadata(command_id text PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	store := &registrationStore{Store: native, pool: pool, config: config, signupFlow: "original-signup-flow"}
+	key, _ := webauthn.NewChallengeDigestKey(bytes.Repeat([]byte{61}, 32))
+	svc, err := webauthn.New(webauthn.Config{TenantID: "tenant-a", RelyingParty: webauthn.RelyingParty{ID: "example.com", Name: "Signup", Origins: []string{"https://login.example.com"}, Version: 1}, ChallengeKey: key, MaximumDuration: 10 * time.Second}, webauthn.Dependencies{Store: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := func() webauthn.CeremonyContext {
+		id, _ := identity.NewCommandID()
+		return webauthn.CeremonyContext{CommandID: id, TenantID: "tenant-a", UserID: "prospective-user", ActorID: "signup-service", CorrelationID: "signup-participation"}
+	}
+	options, err := svc.BeginRegistration(ctx, webauthn.BeginRegistrationRequest{Context: fresh(), UserHandle: bytes.Repeat([]byte{62}, 32), Origin: "https://login.example.com", ResidentKeyRequired: true})
+	if err != nil {
+		t.Fatal("real signup options without a durable identity", err)
+	}
+	assertCounts := func(users, handles, credentials int) {
+		t.Helper()
+		var actual [3]int
+		if err := pool.Raw().QueryRow(ctx, `SELECT (SELECT count(*) FROM identity.users WHERE user_id='prospective-user'),(SELECT count(*) FROM webauthn.user_handles WHERE user_id='prospective-user'),(SELECT count(*) FROM webauthn.credentials WHERE user_id='prospective-user')`).Scan(&actual[0], &actual[1], &actual[2]); err != nil || actual != [3]int{users, handles, credentials} {
+			t.Fatal("unexpected committed signup state", actual, err)
+		}
+		var protected [5]int
+		if err := pool.Raw().QueryRow(ctx, `SELECT (SELECT count(*) FROM webauthn.ceremonies),(SELECT count(*) FROM webauthn.effects),(SELECT count(*) FROM participation_metadata),(SELECT count(*) FROM audit.records WHERE outcome=$1),(SELECT count(*) FROM public.outbox_messages)`, int(audit.OutcomeSucceeded)).Scan(&protected[0], &protected[1], &protected[2], &protected[3], &protected[4]); err != nil || protected != [5]int{1, 1 + credentials, 1 + credentials, 1 + credentials, 1 + credentials} {
+			t.Fatal("signup effects did not commit or roll back together", protected, err)
+		}
+	}
+	assertCounts(0, 0, 0)
+	for _, mismatch := range []string{"scope", "intent", "actor", "actor-kind", "flow", "pending-user", "missing-user", "typed-user", "mixed-user", "command", "schema"} {
+		store.invalidParent = mismatch
+		if denied, err := svc.BeginRegistration(ctx, webauthn.BeginRegistrationRequest{Context: fresh(), UserHandle: bytes.Repeat([]byte{62}, 32), Origin: "https://login.example.com", ResidentKeyRequired: true}); err == nil {
+			t.Fatal("different parent accepted signup options", mismatch)
+		} else if _, ok := denied.Ceremony(); ok {
+			t.Fatal("different parent exposed signup options", mismatch)
+		}
+		assertCounts(0, 0, 0)
+	}
+	store.invalidParent = ""
+	record, _ := options.Ceremony()
+	challenge := optionChallenge(t, ctx, options.TransferJSON)
+	private, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	response := registrationResponse(t, private, bytes.Repeat([]byte{83}, 32), challenge, 0x45, 0)
+	request := func() webauthn.VerifyRegistrationRequest {
+		return webauthn.VerifyRegistrationRequest{Context: fresh(), CeremonyID: record.ID, Origin: "https://login.example.com", ExpectedVersion: 1, Response: response}
+	}
+	bad := request()
+	bad.Response = registrationResponse(t, private, bytes.Repeat([]byte{83}, 32), challenge, 0x41, 0)
+	if verified, err := svc.VerifyRegistration(ctx, bad); err == nil {
+		t.Fatal("non-UV registration admitted")
+	} else if _, ok := verified.Credential(); ok {
+		t.Fatal("non-UV result revealed")
+	}
+	assertCounts(0, 0, 0)
+	store.signupFlow = "other-original-flow"
+	if _, err := svc.VerifyRegistration(ctx, request()); err == nil {
+		t.Fatal("stored ceremony reinterpreted under another signup flow")
+	}
+	assertCounts(0, 0, 0)
+	store.signupFlow = "original-signup-flow"
+	for _, failure := range []string{"foreign", "apply", "commit", "flow-fence", "active-fence"} {
+		store.failApply, store.failCommit = failure == "apply", failure == "commit"
+		store.foreign = failure == "foreign"
+		store.tamperSignup = failure
+		if verified, err := svc.VerifyRegistration(ctx, request()); err == nil {
+			t.Fatal("failed parent committed", failure)
+		} else if _, ok := verified.Credential(); ok {
+			t.Fatal("failed parent exposed credential", failure)
+		}
+		assertCounts(0, 0, 0)
+	}
+	store.failApply, store.failCommit, store.foreign = false, false, false
+	store.tamperSignup = ""
+	verified, err := svc.VerifyRegistration(ctx, request())
+	if err != nil {
+		t.Fatal("real UV signup finalization", err)
+	}
+	if credential, ok := verified.Credential(); !ok || credential.UserID != "prospective-user" {
+		t.Fatal("finalized signup credential missing")
+	}
+	assertCounts(1, 1, 1)
+	if _, err := svc.VerifyRegistration(ctx, request()); err == nil {
+		t.Fatal("signup ceremony replay accepted")
+	}
+	assertCounts(1, 1, 1)
+}
+
+func TestSignupRegistrationUnknownPostgres(t *testing.T) {
+	ctx, pool, config, native := nativeFixture(t)
+	if _, err := pool.Raw().Exec(ctx, `CREATE TABLE participation_metadata(command_id text PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	cut := &commitCut{}
+	cutPool, err := database.New(ctx, database.Config{DSN: os.Getenv("WEBAUTHN_TEST_DSN"), MaxConns: 2, SessionInit: func(ctx context.Context, c *pgx.Conn) error {
+		_, err := c.Exec(ctx, `SET search_path=public`)
+		return err
+	}, Configure: func(c *database.PoolConfig) error {
+		dial := c.ConnConfig.DialFunc
+		c.ConnConfig.DialFunc = func(ctx context.Context, network, address string) (net.Conn, error) {
+			conn, err := dial(ctx, network, address)
+			if err != nil {
+				return nil, err
+			}
+			return &commitCutConn{Conn: conn, cut: cut}, nil
+		}
+		return nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cutPool.Close(context.Background())
+	cutNative, err := webauthnpg.New(cutPool, webauthnpg.Config{Coordinator: config, PolicyID: "participation-test", PolicyVersion: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := webauthn.NewChallengeDigestKey(bytes.Repeat([]byte{61}, 32))
+	serviceConfig := webauthn.Config{TenantID: "tenant-a", RelyingParty: webauthn.RelyingParty{ID: "example.com", Name: "Signup", Origins: []string{"https://login.example.com"}, Version: 1}, ChallengeKey: key, MaximumDuration: 10 * time.Second}
+	store := &registrationStore{Store: cutNative, pool: cutPool, config: config, signupFlow: "original-signup-flow"}
+	svc, err := webauthn.New(serviceConfig, webauthn.Dependencies{Store: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartedStore := &registrationStore{Store: native, pool: pool, config: config, signupFlow: store.signupFlow}
+	restarted, err := webauthn.New(serviceConfig, webauthn.Dependencies{Store: restartedStore})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := func() webauthn.CeremonyContext {
+		id, _ := identity.NewCommandID()
+		return webauthn.CeremonyContext{CommandID: id, TenantID: "tenant-a", UserID: "prospective-user", ActorID: "signup-service", CorrelationID: "signup-unknown"}
+	}
+	original := webauthn.BeginRegistrationRequest{Context: fresh(), UserHandle: bytes.Repeat([]byte{62}, 32), Origin: "https://login.example.com", ResidentKeyRequired: true}
+	cut.remaining.Store(2)
+	options, err := svc.BeginRegistration(ctx, original)
+	var unknown webauthn.UnknownCommit
+	if !errors.As(err, &unknown) || !cut.cut.Load() {
+		t.Fatal("signup options acknowledgement loss not unknown", err)
+	}
+	if _, ok := options.Ceremony(); ok {
+		t.Fatal("unknown signup options revealed")
+	}
+	if outcome, err := restarted.Recover(ctx, webauthn.RecoveryRequest{Context: original.Context, Operation: webauthn.BeginRegistrationOperation}); err != nil || outcome != identity.CommitOutcomeCommitted {
+		t.Fatal("original signup options not recovered", err)
+	}
+	if retry, err := restarted.BeginRegistration(ctx, original); err == nil {
+		t.Fatal("signup challenge reissued after unknown commit")
+	} else if err := retry.TransferJSON(ctx, func(context.Context, []byte) error { t.Fatal("unknown challenge revealed again"); return nil }); err == nil {
+		t.Fatal("signup replay retained challenge custody")
+	}
+	var users int
+	if err := pool.Raw().QueryRow(ctx, `SELECT count(*) FROM identity.users WHERE user_id='prospective-user'`).Scan(&users); err != nil || users != 0 {
+		t.Fatal("unknown options created an identity", err)
+	}
+	original.Context = fresh()
+	options, err = svc.BeginRegistration(ctx, original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, _ := options.Ceremony()
+	challenge := optionChallenge(t, ctx, options.TransferJSON)
+	private, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	request := webauthn.VerifyRegistrationRequest{Context: fresh(), CeremonyID: record.ID, Origin: original.Origin, ExpectedVersion: 1, Response: registrationResponse(t, private, bytes.Repeat([]byte{84}, 32), challenge, 0x45, 0)}
+	cut.cut.Store(false)
+	cut.remaining.Store(2)
+	if verified, err := svc.VerifyRegistration(ctx, request); !errors.As(err, &unknown) || !cut.cut.Load() {
+		t.Fatal("signup verification acknowledgement loss not unknown", err)
+	} else if _, ok := verified.Credential(); ok {
+		t.Fatal("unknown signup authenticated")
+	}
+	if outcome, err := restarted.Recover(ctx, webauthn.RecoveryRequest{Context: request.Context, Operation: webauthn.RegistrationOperation, CredentialID: bytes.Repeat([]byte{84}, 32)}); err != nil || outcome != identity.CommitOutcomeCommitted {
+		t.Fatal("original signup verification not recovered", err)
+	}
+	if verified, err := restarted.VerifyRegistration(ctx, request); err == nil {
+		t.Fatal("signup recovery reissued verification")
+	} else if _, ok := verified.Credential(); ok {
+		t.Fatal("signup recovery authenticated")
+	}
+	var committed [4]int
+	if err := pool.Raw().QueryRow(ctx, `SELECT (SELECT count(*) FROM identity.users WHERE user_id='prospective-user'),(SELECT count(*) FROM webauthn.user_handles),(SELECT count(*) FROM webauthn.credentials),(SELECT count(*) FROM webauthn.ceremonies WHERE signup_user_id IS NULL AND signup_flow_id='original-signup-flow' AND user_id='prospective-user' AND consumed_by IS NOT NULL)`).Scan(&committed[0], &committed[1], &committed[2], &committed[3]); err != nil || committed != [4]int{1, 1, 1, 1} {
+		t.Fatal("unknown signup lost atomic persisted effects", committed, err)
+	}
 }
 
 func TestRegistrationParticipationPostgres(t *testing.T) {

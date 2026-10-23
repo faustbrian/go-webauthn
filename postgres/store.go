@@ -246,7 +246,7 @@ func (s *Store) LoadCeremony(ctx context.Context, q webauthn.Lookup) (webauthn.C
 	ctx, cancel := context.WithTimeout(ctx, s.config().Coordinator.MaximumDuration)
 	defer cancel()
 	var wire []byte
-	e := s.pool.Raw().QueryRow(ctx, `SELECT record FROM webauthn.ceremonies WHERE ceremony_id=$1 AND tenant_id=$2 AND COALESCE(user_id,'')=$3 AND rp_id=$4 AND COALESCE(anonymous_flow_id,'')=$5`, q.CeremonyID, string(q.Context.TenantID), string(q.Context.UserID), q.RPID, q.Context.AnonymousFlowID).Scan(&wire)
+	e := s.pool.Raw().QueryRow(ctx, `SELECT record FROM webauthn.ceremonies WHERE ceremony_id=$1 AND tenant_id=$2 AND COALESCE(user_id,signup_user_id,'')=$3 AND rp_id=$4 AND COALESCE(anonymous_flow_id,'')=$5`, q.CeremonyID, string(q.Context.TenantID), string(q.Context.UserID), q.RPID, q.Context.AnonymousFlowID).Scan(&wire)
 	var r webauthn.CeremonyRecord
 	if e != nil {
 		return r, translate(e)

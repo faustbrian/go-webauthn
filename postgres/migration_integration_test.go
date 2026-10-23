@@ -41,7 +41,7 @@ func TestDiscoverablePopulatedMigrationPostgres(t *testing.T) {
 		}
 	}
 	history, e = (webauthnpg.MigrationSource{}).Load(ctx)
-	if e != nil || len(history) != 3 {
+	if e != nil || len(history) != 4 {
 		t.Fatal("forward migration history", e)
 	}
 	if _, e = pool.Raw().Exec(ctx, history[0].UpSQL()); e != nil {
@@ -123,7 +123,7 @@ func TestDiscoverablePopulatedMigrationPostgres(t *testing.T) {
 	requireSubjectRejection(insertEffect("identity.passkey.signin-options", "", "original-populated-flow"))
 	snapshot := func() [3]string {
 		var rows [3]string
-		if e := pool.Raw().QueryRow(ctx, `SELECT (SELECT jsonb_agg(to_jsonb(c) ORDER BY ceremony_id)::text FROM webauthn.ceremonies c),(SELECT jsonb_agg(to_jsonb(e) ORDER BY command_id)::text FROM webauthn.effects e),(SELECT jsonb_agg(to_jsonb(c) ORDER BY credential_id)::text FROM webauthn.credentials c)`).Scan(&rows[0], &rows[1], &rows[2]); e != nil {
+		if e := pool.Raw().QueryRow(ctx, `SELECT (SELECT jsonb_agg(to_jsonb(c)-'signup_user_id'-'signup_flow_id' ORDER BY ceremony_id)::text FROM webauthn.ceremonies c),(SELECT jsonb_agg(to_jsonb(e) ORDER BY command_id)::text FROM webauthn.effects e),(SELECT jsonb_agg(to_jsonb(c) ORDER BY credential_id)::text FROM webauthn.credentials c)`).Scan(&rows[0], &rows[1], &rows[2]); e != nil {
 			t.Fatal(e)
 		}
 		return rows
@@ -145,5 +145,20 @@ func TestDiscoverablePopulatedMigrationPostgres(t *testing.T) {
 	}
 	for _, subject := range [][2]string{{"user-a", "original-populated-flow"}, {"", ""}} {
 		requireSubjectRejection(insertEffect("identity.passkey.signin-options", subject[0], subject[1]))
+	}
+	prior = snapshot()
+	if _, e = pool.Raw().Exec(ctx, history[3].UpSQL()); e != nil {
+		t.Fatal("populated signup migration", e)
+	}
+	if snapshot() != prior {
+		t.Fatal("migration 4 changed original rows")
+	}
+	for _, purpose := range []string{"identity.passkey.register-options", "identity.passkey.register-verify"} {
+		if e = insertEffect(purpose, "", "original-signup-flow"); e != nil {
+			t.Fatal("migration 4 rejected exact signup purpose", e)
+		}
+	}
+	for _, purpose := range []string{"identity.passkey.signin-verify", "webauthn.begin-create", "unsupported.purpose"} {
+		requireSubjectRejection(insertEffect(purpose, "", "original-signup-flow"))
 	}
 }
