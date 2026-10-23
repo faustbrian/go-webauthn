@@ -317,6 +317,9 @@ func checkAssertion(ctx context.Context, w kernel.Work, owner kernel.FeatureExec
 	if err := p.current(ctx, w); err != nil {
 		return err
 	}
+	if err := p.checkAssertionCredential(ctx, w); err != nil {
+		return err
+	}
 	now, err := w.DatabaseTime(ctx)
 	if err != nil {
 		return err

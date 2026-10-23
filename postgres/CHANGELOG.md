@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Add native self-user credential removal participation in the existing
+  passkey delete parent's sole transaction. Exact optimistic protocol state is
+  replaced by a key-erased, versioned terminal row; RP-wide credential and
+  handle reservations remain, so registration cannot resurrect the old ID.
+  Current lookups and retained assertion snapshots deny removed credentials,
+  while old verifier queries fail closed without a schema migration. Parent
+  fresh-proof, passkey authority and session effects remain parent-owned;
+  retained protocol effects support original-command recovery, not new
+  authentication or authenticator-local erasure.
+
 - Add explicit native resident-discovery assertion participation with anonymous
   service/flow-attributed options and opaque verified-target finalization under
   the self-human parent. Original anonymous ceremony consumption, current

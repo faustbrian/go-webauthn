@@ -269,15 +269,15 @@ func (s *Store) LoadCredential(ctx context.Context, q webauthn.Lookup, id []byte
 	// its actual parent purpose, so its sole coordinator can classify replay.
 	var retainedCeremony []byte
 	var actor, purpose string
-	e := s.pool.Raw().QueryRow(ctx, `SELECT before_credential,ceremony,actor_id,purpose FROM webauthn.effects WHERE command_id=$1 AND tenant_id=$2 AND user_id=$3 AND purpose IN ('webauthn.assert','identity.passkey.signin-verify') AND ceremony_id=$5 AND before_credential->>'RPID'=$6 AND (actor_id=$4 OR (purpose='identity.passkey.signin-verify' AND actor_id=user_id AND ceremony->'Intent'->'Context'->>'ActorID'=$4))`, string(q.Context.CommandID), string(q.Context.TenantID), string(q.Context.UserID), string(q.Context.ActorID), q.CeremonyID, q.RPID).Scan(&wire, &retainedCeremony, &actor, &purpose)
+	e := s.pool.Raw().QueryRow(ctx, `SELECT before_credential,ceremony,actor_id,purpose FROM webauthn.effects WHERE command_id=$1 AND tenant_id=$2 AND user_id=$3 AND purpose IN ('webauthn.assert','identity.passkey.signin-verify') AND ceremony_id=$5 AND before_credential->>'RPID'=$6 AND (actor_id=$4 OR (purpose='identity.passkey.signin-verify' AND actor_id=user_id AND ceremony->'Intent'->'Context'->>'ActorID'=$4)) AND EXISTS(SELECT 1 FROM webauthn.credentials c WHERE c.rp_id=$6 AND c.credential_id=$7 AND c.tenant_id=$2 AND c.user_id=$3 AND COALESCE(c.record->>'PublicKey','')<>'')`, string(q.Context.CommandID), string(q.Context.TenantID), string(q.Context.UserID), string(q.Context.ActorID), q.CeremonyID, q.RPID, id).Scan(&wire, &retainedCeremony, &actor, &purpose)
 	if errors.Is(e, pgx.ErrNoRows) {
-		e = s.pool.Raw().QueryRow(ctx, `SELECT record FROM webauthn.credentials WHERE rp_id=$1 AND credential_id=$2 AND tenant_id=$3 AND user_id=$4`, q.RPID, id, string(q.Context.TenantID), string(q.Context.UserID)).Scan(&wire)
+		e = s.pool.Raw().QueryRow(ctx, `SELECT record FROM webauthn.credentials WHERE rp_id=$1 AND credential_id=$2 AND tenant_id=$3 AND user_id=$4 AND COALESCE(record->>'PublicKey','')<>''`, q.RPID, id, string(q.Context.TenantID), string(q.Context.UserID)).Scan(&wire)
 	}
 	var c webauthn.Credential
 	if e != nil {
 		return c, translate(e)
 	}
-	if len(wire) > 32768 || json.Unmarshal(wire, &c) != nil || !bytes.Equal(c.ID, id) {
+	if len(wire) > 32768 || json.Unmarshal(wire, &c) != nil || !bytes.Equal(c.ID, id) || len(c.PublicKey) == 0 {
 		return c, webauthn.Unavailable{}
 	}
 	if actor != "" && actor != string(q.Context.ActorID) {
@@ -304,15 +304,15 @@ func (s *Store) LoadDiscoverableCredential(ctx context.Context, q webauthn.Looku
 	var wire []byte
 	var retainedCeremony []byte
 	var actor, purpose, target string
-	e := s.pool.Raw().QueryRow(ctx, `SELECT before_credential,ceremony,actor_id,purpose,COALESCE(user_id,'') FROM webauthn.effects WHERE command_id=$1 AND tenant_id=$2 AND ceremony_id=$5 AND before_credential->>'RPID'=$6 AND ((purpose='webauthn.assert-discoverable' AND user_id IS NULL AND anonymous_flow_id=$3 AND actor_id=$4) OR (purpose='identity.passkey.signin-verify' AND actor_id=user_id AND anonymous_flow_id IS NULL AND ceremony->'Intent'->'Context'->>'AnonymousFlowID'=$3 AND ceremony->'Intent'->'Context'->>'ActorID'=$4))`, string(q.Context.CommandID), string(q.Context.TenantID), q.Context.AnonymousFlowID, string(q.Context.ActorID), q.CeremonyID, q.RPID).Scan(&wire, &retainedCeremony, &actor, &purpose, &target)
+	e := s.pool.Raw().QueryRow(ctx, `SELECT before_credential,ceremony,actor_id,purpose,COALESCE(user_id,'') FROM webauthn.effects WHERE command_id=$1 AND tenant_id=$2 AND ceremony_id=$5 AND before_credential->>'RPID'=$6 AND ((purpose='webauthn.assert-discoverable' AND user_id IS NULL AND anonymous_flow_id=$3 AND actor_id=$4) OR (purpose='identity.passkey.signin-verify' AND actor_id=user_id AND anonymous_flow_id IS NULL AND ceremony->'Intent'->'Context'->>'AnonymousFlowID'=$3 AND ceremony->'Intent'->'Context'->>'ActorID'=$4)) AND EXISTS(SELECT 1 FROM webauthn.credentials c WHERE c.rp_id=$6 AND c.credential_id=$7 AND c.user_handle=$8 AND c.tenant_id=$2 AND COALESCE(c.record->>'PublicKey','')<>'')`, string(q.Context.CommandID), string(q.Context.TenantID), q.Context.AnonymousFlowID, string(q.Context.ActorID), q.CeremonyID, q.RPID, id, handle).Scan(&wire, &retainedCeremony, &actor, &purpose, &target)
 	if errors.Is(e, pgx.ErrNoRows) {
-		e = s.pool.Raw().QueryRow(ctx, `SELECT c.record FROM webauthn.credentials c JOIN webauthn.user_handles h ON h.rp_id=c.rp_id AND h.user_handle=c.user_handle AND h.tenant_id=c.tenant_id AND h.user_id=c.user_id JOIN webauthn.relying_parties r ON r.rp_id=c.rp_id AND r.tenant_id=c.tenant_id WHERE c.rp_id=$1 AND c.credential_id=$2 AND c.user_handle=$3 AND c.tenant_id=$4`, q.RPID, id, handle, string(q.Context.TenantID)).Scan(&wire)
+		e = s.pool.Raw().QueryRow(ctx, `SELECT c.record FROM webauthn.credentials c JOIN webauthn.user_handles h ON h.rp_id=c.rp_id AND h.user_handle=c.user_handle AND h.tenant_id=c.tenant_id AND h.user_id=c.user_id JOIN webauthn.relying_parties r ON r.rp_id=c.rp_id AND r.tenant_id=c.tenant_id WHERE c.rp_id=$1 AND c.credential_id=$2 AND c.user_handle=$3 AND c.tenant_id=$4 AND COALESCE(c.record->>'PublicKey','')<>''`, q.RPID, id, handle, string(q.Context.TenantID)).Scan(&wire)
 	}
 	var c webauthn.Credential
 	if e != nil {
 		return c, translate(e)
 	}
-	if len(wire) > 32768 || json.Unmarshal(wire, &c) != nil || !bytes.Equal(c.ID, id) || !bytes.Equal(c.UserHandle, handle) || c.TenantID != q.Context.TenantID || c.RPID != q.RPID {
+	if len(wire) > 32768 || json.Unmarshal(wire, &c) != nil || len(c.PublicKey) == 0 || !bytes.Equal(c.ID, id) || !bytes.Equal(c.UserHandle, handle) || c.TenantID != q.Context.TenantID || c.RPID != q.RPID {
 		return webauthn.Credential{}, webauthn.Denied{}
 	}
 	if purpose == "identity.passkey.signin-verify" {

@@ -316,6 +316,9 @@ func (p *phase) CheckFeatureCommit(ctx context.Context, w kernel.Work, c identit
 	if e := p.current(ctx, w); e != nil {
 		return e
 	}
+	if e := p.checkAssertionCredential(ctx, w); e != nil {
+		return e
+	}
 	now, e := w.DatabaseTime(ctx)
 	if e != nil {
 		return e
