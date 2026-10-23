@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add opaque identified ES256 assertion participation for native passkey
+  signin options and verification. Ceremony creation and one-use credential
+  counter/version updates can share the parent's existing identity-coordinator
+  Work and metadata, with current-user/final-expiry fences and original-command
+  recovery. Unknown and replayed commits release no challenge or verification.
+  Standalone APIs, registration participants and migrations remain unchanged;
+  this protocol seam alone is not a complete authenticated passkey workflow.
+
 - Add opt-in resident-required ES256 registration participation for the native
   passkey enrollment owner. Ceremony creation and verified credential insertion
   can share the parent's existing identity-coordinator Work, proof use and

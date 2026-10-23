@@ -265,7 +265,9 @@ func (s *Store) LoadCredential(ctx context.Context, q webauthn.Lookup, id []byte
 	var wire []byte
 	// An exact original assertion retry uses retained pre-transition public
 	// input, never today's counter rebased as historical verification evidence.
-	e := s.pool.Raw().QueryRow(ctx, `SELECT before_credential FROM webauthn.effects WHERE command_id=$1 AND tenant_id=$2 AND user_id=$3 AND actor_id=$4 AND purpose='webauthn.assert' AND ceremony_id=$5 AND before_credential->>'RPID'=$6`, string(q.Context.CommandID), string(q.Context.TenantID), string(q.Context.UserID), string(q.Context.ActorID), q.CeremonyID, q.RPID).Scan(&wire)
+	// The selected native passkey participant records that same input under
+	// its actual parent purpose, so its sole coordinator can classify replay.
+	e := s.pool.Raw().QueryRow(ctx, `SELECT before_credential FROM webauthn.effects WHERE command_id=$1 AND tenant_id=$2 AND user_id=$3 AND actor_id=$4 AND purpose IN ('webauthn.assert','identity.passkey.signin-verify') AND ceremony_id=$5 AND before_credential->>'RPID'=$6`, string(q.Context.CommandID), string(q.Context.TenantID), string(q.Context.UserID), string(q.Context.ActorID), q.CeremonyID, q.RPID).Scan(&wire)
 	if errors.Is(e, pgx.ErrNoRows) {
 		e = s.pool.Raw().QueryRow(ctx, `SELECT record FROM webauthn.credentials WHERE rp_id=$1 AND credential_id=$2 AND tenant_id=$3 AND user_id=$4`, q.RPID, id, string(q.Context.TenantID), string(q.Context.UserID)).Scan(&wire)
 	}
