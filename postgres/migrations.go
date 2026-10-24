@@ -37,8 +37,29 @@ func (MigrationSource) Load(ctx context.Context) ([]migrations.Migration, error)
 	if e != nil {
 		return nil, webauthn.Unavailable{}
 	}
-	return []migrations.Migration{m, d, p, s}, nil
+	a, e := migrations.NewMigration(5, "webauthn_session_enrollment", migrations.TransactionModeDefault, sessionEnrollmentSQL, "")
+	if e != nil {
+		return nil, webauthn.Unavailable{}
+	}
+	return []migrations.Migration{m, d, p, s, a}, nil
 }
+
+// An enrollment assertion authorizes a later registration only until its own
+// original expiry. Keep that independent ceiling outside the root's immutable
+// digest-bound ceremony record, whose five-minute TTL must remain unchanged.
+const sessionEnrollmentSQL = `ALTER TABLE webauthn.ceremonies ADD COLUMN authorization_expires_at timestamptz;
+ALTER TABLE webauthn.ceremonies ADD COLUMN authorization_ceremony_id text COLLATE "C";
+ALTER TABLE webauthn.ceremonies ADD CONSTRAINT ceremonies_enrollment_authority CHECK(
+ (authorization_expires_at IS NULL AND authorization_ceremony_id IS NULL) OR
+ (authorization_expires_at IS NOT NULL AND authorization_ceremony_id IS NOT NULL AND kind='create' AND user_id IS NOT NULL AND signup_flow_id IS NULL AND anonymous_flow_id IS NULL AND octet_length(authorization_ceremony_id)=22 AND authorization_ceremony_id<>ceremony_id AND authorization_expires_at<=expires_at));
+ALTER TABLE webauthn.effects ADD COLUMN enrollment_stage smallint;
+ALTER TABLE webauthn.effects ADD COLUMN enrollment_source jsonb CHECK(octet_length(enrollment_source::text)<=262144);
+ALTER TABLE webauthn.effects ADD CONSTRAINT effects_enrollment_profile CHECK(
+ (enrollment_stage IS NULL AND enrollment_source IS NULL) OR
+ (enrollment_stage=1 AND purpose='identity.passkey.register-options' AND user_id IS NOT NULL AND actor_id=user_id AND anonymous_flow_id IS NULL AND enrollment_source IS NULL AND before_credential IS NULL AND after_credential IS NULL) OR
+ (enrollment_stage=2 AND purpose='identity.passkey.register-options' AND user_id IS NOT NULL AND actor_id=user_id AND anonymous_flow_id IS NULL AND enrollment_source IS NOT NULL AND before_credential IS NOT NULL AND after_credential IS NOT NULL) OR
+ (enrollment_stage=3 AND purpose='identity.passkey.register-verify' AND user_id IS NOT NULL AND actor_id=user_id AND anonymous_flow_id IS NULL AND enrollment_source IS NULL AND before_credential IS NULL AND after_credential IS NOT NULL));
+`
 
 // Pending signup has no identity to reference. Keep the existing user FK and
 // anonymous-discovery namespace intact; a verified one-use update alone promotes

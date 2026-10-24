@@ -41,7 +41,7 @@ func TestDiscoverablePopulatedMigrationPostgres(t *testing.T) {
 		}
 	}
 	history, e = (webauthnpg.MigrationSource{}).Load(ctx)
-	if e != nil || len(history) != 4 {
+	if e != nil || len(history) != 5 {
 		t.Fatal("forward migration history", e)
 	}
 	if _, e = pool.Raw().Exec(ctx, history[0].UpSQL()); e != nil {
@@ -160,5 +160,15 @@ func TestDiscoverablePopulatedMigrationPostgres(t *testing.T) {
 	}
 	for _, purpose := range []string{"identity.passkey.signin-verify", "webauthn.begin-create", "unsupported.purpose"} {
 		requireSubjectRejection(insertEffect(purpose, "", "original-signup-flow"))
+	}
+	if _, e = pool.Raw().Exec(ctx, history[4].UpSQL()); e != nil {
+		t.Fatal("populated session enrollment migration", e)
+	}
+	if e = pool.Raw().QueryRow(ctx, `SELECT row_to_json(c)::text FROM webauthn.credentials c`).Scan(&after); e != nil || after != before {
+		t.Fatal("enrollment migration changed old credential", e)
+	}
+	var unchanged int
+	if e = pool.Raw().QueryRow(ctx, `SELECT count(*) FROM webauthn.ceremonies WHERE authorization_expires_at IS NULL AND authorization_ceremony_id IS NULL`).Scan(&unchanged); e != nil || unchanged < 2 {
+		t.Fatal("enrollment migration reclassified old ceremonies", e)
 	}
 }

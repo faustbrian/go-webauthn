@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Add explicitly selected session-bound additional enrollment: original UV
+  assertion options, atomic assertion consumption plus registration options,
+  and matching registration finalization share the native parent's Work.
+  Compound effects retain exact source/creation identities and enforce the
+  original assertion expiry through registration precommit; a later ceremony
+  cannot renew enrollment authority. Legacy enrollment/signup finalization
+  cannot consume a session-bound ceremony. Install additive migration 5 before
+  using this adapter revision. Existing migration history and participant
+  profiles remain unchanged; current session, risk and metadata authority stay
+  parent-owned, and retries/recovery never reissue challenge or verification.
+
 - Add explicitly selected self-human assertion participation for native passkey
   rename. Protected update-action options and finalization schemas cannot substitute
   for sign-in; finalization and original recovery retain the parent's exact

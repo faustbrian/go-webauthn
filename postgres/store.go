@@ -262,6 +262,9 @@ func (s *Store) LoadCredential(ctx context.Context, q webauthn.Lookup, id []byte
 	}
 	ctx, cancel := context.WithTimeout(ctx, s.config().Coordinator.MaximumDuration)
 	defer cancel()
+	if c, found, err := s.loadEnrollmentAssertionCredential(ctx, q, id); found || err != nil {
+		return c, err
+	}
 	var wire []byte
 	// An exact original assertion retry uses retained pre-transition public
 	// input, never today's counter rebased as historical verification evidence.

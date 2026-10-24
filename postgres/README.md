@@ -11,6 +11,46 @@ These explicit opaque participants do not independently commit, authenticate
 an identity or replace the parent's current authority and session workflow.
 Standalone store APIs retain their existing behavior.
 
+Session-bound additional enrollment explicitly selects three profiles, all
+self-human, owner `passkey`, schema version 1 and required record:
+
+| Selector | Canonical operation / schema suffix | Lifecycle (0 to 1, index 0) |
+| --- | --- | --- |
+| `EnrollmentAssertionCreation` | `identity.passkey.register-options.session-assertion-options-v1` | `passkey.reauthentication.started.v1` |
+| `EnrollmentAuthorization` | `identity.passkey.register-options.session-registration-options-v1` | `passkey.registration.started.v1` |
+| `SessionRegistrationFinalization` | `identity.passkey.register-verify.session-registration-v1` | `identity.passkey.create_credential` |
+
+The first two share canonical operation `identity.passkey.register-options`
+but require distinct original request identities. The last uses canonical
+single-use `identity.passkey.register-verify`. No sign-in participant is admitted.
+For each participant append `Fields`, call `Validate` during plan preparation,
+then `Apply` and final `Check` with the actual parent and its existing Work.
+Generate options once after acknowledged reservation, before opening Work;
+defer `Discard`. Return `Result` only from the actual acknowledged parent receipt.
+
+Inside the real root `Store.FinalizeAssertion` callback, call the same root
+service's `BeginRegistration`. Its `Store.CreateCeremony` callback supplies the
+genuine opaque assertion transition and genuine opaque creation together to
+`EnrollmentAuthorization`. Both must share the exact current invocation context,
+user handle, RP/version and origin. The original assertion ceremony remains A;
+the new registration ceremony belongs to B's command. The compound stages source
+consumption, counter/version changes, registration creation and one recoverable
+protocol effect inside the parent's sole Work. Its `Result` returns the original
+registration record/challenge and assertion credential together, never a newly
+constructed verifier result or a separately committed proof.
+
+`EnrollmentAuthorization.AuthorizationExpiresAt` is the genuine original A
+expiry, not the later registration TTL. Migration 5 stores that ceiling and
+exact source/effect linkage separately from immutable root ceremony JSON.
+Finalization and final precommit enforce it even while the registration ceremony
+itself is still live. Legacy password/signup/standalone finalization cannot consume
+a ceiling-bound ceremony; the session selector cannot consume a legacy ceremony.
+`RecoverEnrollment` runs only inside the original parent's recovery Work;
+pending journals with any effect remain unknown. Recovery/retry must use the
+parent coordinator's original metadata and never regenerate or reveal options.
+The parent still owns original session/action commitment, CSRF, current
+directory/passkey/MFA/policy/risk admission, mappings, labels and lifecycle.
+
 `Store.UpdateAssertionCreation` and `Store.UpdateAssertionFinalization` explicitly
 select the self-human identified ES256/UV assertion participant for passkey
 rename. Both phases use the protected `identity.passkey.update` action. Options
@@ -34,7 +74,7 @@ The parent must preserve original-command binding, final precommit checks,
 acknowledged-result ordering and original recovery. Unknown outcomes and
 replays return no new challenge or verification. Install the identity,
 audit, outbox and complete protocol histories before selecting composition.
-This adapter revision requires forward migration 4 before use, including
+This adapter revision requires forward migration 5 before use, including
 retained enrollment/discovery; older binaries remain compatible with the
 populated forward schema.
 

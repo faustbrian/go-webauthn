@@ -14,19 +14,20 @@ import (
 // All mutable fields are invocation-local, owned by one serial service call.
 // There is no map of pending work, private transaction or secondary journal.
 type phase struct {
-	store         *Store
-	command       identity.Command
-	binding       identity.CommandBinding
-	plan          kernel.CommandPlan
-	coordinator   *kernel.Coordinator
-	before, after uint64
-	creation      *webauthn.CeremonyCreation
-	registration  *webauthn.RegistrationMutation
-	assertion     *webauthn.AssertionMutation
-	ceremony      webauthn.CeremonyRecord
-	challenge     webauthn.Challenge
-	applied       bool
-	signupFlow    string
+	store               *Store
+	command             identity.Command
+	binding             identity.CommandBinding
+	plan                kernel.CommandPlan
+	coordinator         *kernel.Coordinator
+	before, after       uint64
+	creation            *webauthn.CeremonyCreation
+	registration        *webauthn.RegistrationMutation
+	assertion           *webauthn.AssertionMutation
+	ceremony            webauthn.CeremonyRecord
+	challenge           webauthn.Challenge
+	applied             bool
+	signupFlow          string
+	sessionRegistration bool
 	// Composed registration aliases share reveal/generation state. The owning
 	// native invocation is serial, just like the generation-bound Work itself.
 	participantGenerated, participantReleased bool
@@ -236,6 +237,13 @@ func (p *phase) consume(ctx context.Context, w kernel.Work) error {
 		// Only this exact verified pending ceremony can gain its real FK-backed
 		// user association. Neither retries nor generic protocol calls promote it.
 		query = `UPDATE webauthn.ceremonies SET consumed_by=$1,user_id=signup_user_id,signup_user_id=NULL WHERE ceremony_id=$2 AND tenant_id=$3 AND user_id IS NULL AND signup_user_id=$4 AND rp_id=$5 AND consumed_by IS NULL AND expires_at>clock_timestamp() AND version=1 AND record=$6::jsonb AND signup_flow_id=$7 AND anonymous_flow_id IS NULL AND kind='create'`
+	}
+	// Compound session enrollment is not interchangeable with password/signup
+	// finalization. Only its explicit selector may consume a ceiling-bound row.
+	if p.sessionRegistration {
+		query += ` AND authorization_expires_at>clock_timestamp()`
+	} else {
+		query += ` AND authorization_expires_at IS NULL`
 	}
 	n, e := w.Exec(ctx, query, string(p.binding.CommandID), r.ID, string(p.binding.TenantID), string(user), r.Intent.RPID, string(wire), flow)
 	if e != nil {
