@@ -15,13 +15,18 @@ lifecycle. The protocol credential retains its independent monotonic version
 and counter transition; those are not the command-record lifecycle.
 
 The identified selectors accept `get`, a 32-byte
-stable handle, an explicit allowed-credential list and ES256. The root service
+stable handle, an explicit allowed-credential list and an ES256/Ed25519 profile.
+Nil preserves ES256-only selection; explicit profiles retain their exact ordered
+unique allowlist. The verified before/after credential must retain its selected
+algorithm through finalization and recovery. The root service
 always requires UP and UV and uses `none` attestation for enrollment. The
 parent must admit its actual resident-required enrollment profile and mapping;
 assertion input does not itself prove residency or fresh attestation.
-Signup, credential management, shared-RP tenancy and other algorithms remain
+Signup, credential management, shared-RP tenancy and RS256 remain
 unsupported by these participants. Resident discovery uses the explicit
 anonymous selectors below, not an identified request with omitted checks.
+Protocol support does not automatically enable a new algorithm in the owning
+native passkey workflow or its HTTP composition.
 
 `Store.AssertionCreation` accepts only the root service's opaque
 `CeremonyCreation`; `Store.AssertionFinalization` accepts only its opaque
@@ -140,8 +145,11 @@ Recovery neither changes that anonymous protocol attribution nor remints
 options, challenges, proof, counter transitions or sessions.
 
 The [public native-coordinator fixture](../postgres/assertion_participant_integration_test.go)
-uses real PostgreSQL and a genuinely registered ES256 credential to exercise
+uses real PostgreSQL and genuinely registered ES256/Ed25519 credentials to exercise
 shared rollback, final checks, one-use/CAS races and lost server COMMIT recovery.
+The [algorithm-profile cases](../postgres/participant_algorithms_integration_test.go)
+exercise selected membership and changed/reordered profile denial with genuine
+root-verified responses.
 Its parent-only metadata is not the actual passkey workflow, current factor/risk
 admission or session issuer. Full authenticated passkey workflow, public
 consumer composition and release qualification remain the owning platform's

@@ -5,9 +5,6 @@ package postgres_test
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -498,6 +495,11 @@ func TestPreauthAssertionParticipationPostgres(t *testing.T) {
 
 func testAssertionParticipationPostgres(t *testing.T, preauth bool, updateProfile ...bool) {
 	update := len(updateProfile) > 0 && updateProfile[0]
+	testAssertionAlgorithmsPostgres(t, preauth, update, participantProfile{})
+}
+
+func testAssertionAlgorithmsPostgres(t *testing.T, preauth, update bool, profile participantProfile) {
+	registrationResponse, assertionResponse := profile.registration, profile.assertion
 	ctx, pool, config, native := nativeFixture(t)
 	if _, err := pool.Raw().Exec(ctx, `CREATE TABLE assertion_participation_metadata(command_id text PRIMARY KEY)`); err != nil {
 		t.Fatal(err)
@@ -505,6 +507,7 @@ func testAssertionParticipationPostgres(t *testing.T, preauth bool, updateProfil
 	store := &assertionStore{Store: native, pool: pool, config: config, preauth: preauth, update: update}
 	key, _ := webauthn.NewChallengeDigestKey(bytes.Repeat([]byte{91}, 32))
 	serviceConfig := webauthn.Config{TenantID: "tenant-a", RelyingParty: webauthn.RelyingParty{ID: "example.com", Name: "Assertion Participant", Origins: []string{"https://login.example.com"}, Version: 1}, ChallengeKey: key, MaximumDuration: 10 * time.Second}
+	serviceConfig.Algorithms = profile.algorithms
 	svc, err := webauthn.New(serviceConfig, webauthn.Dependencies{Store: store})
 	if err != nil {
 		t.Fatal(err)
@@ -518,7 +521,7 @@ func testAssertionParticipationPostgres(t *testing.T, preauth bool, updateProfil
 		return webauthn.CeremonyContext{CommandID: id, TenantID: "tenant-a", UserID: "user-a", ActorID: "user-a", CorrelationID: "assertion-participation"}
 	}
 	handle, id := bytes.Repeat([]byte{92}, 32), bytes.Repeat([]byte{93}, 32)
-	private, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	private := profile.key(t)
 	opts, err := registrationService.BeginRegistration(ctx, webauthn.BeginRegistrationRequest{Context: fresh(), UserHandle: handle, Origin: "https://login.example.com", ResidentKeyRequired: true})
 	if err != nil {
 		t.Fatal(err)
@@ -561,15 +564,9 @@ func testAssertionParticipationPostgres(t *testing.T, preauth bool, updateProfil
 			t.Fatal("unsupported creation exposed options")
 		}
 		expanded := serviceConfig
-		expanded.Algorithms = []webauthn.Algorithm{webauthn.ES256, webauthn.EdDSA}
-		expandedService, err := webauthn.New(expanded, webauthn.Dependencies{Store: store})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if options, err := expandedService.BeginAssertion(ctx, beginRequest()); err == nil {
-			t.Fatal("expanded algorithm profile accepted")
-		} else if _, ok := options.Ceremony(); ok {
-			t.Fatal("expanded profile exposed ceremony")
+		expanded.Algorithms = []webauthn.Algorithm{webauthn.ES256, -257}
+		if _, err := webauthn.New(expanded, webauthn.Dependencies{Store: store}); err == nil {
+			t.Fatal("unsupported RSA algorithm profile accepted")
 		}
 		request := beginRequest()
 		request.Context.ActorID = "different-actor"

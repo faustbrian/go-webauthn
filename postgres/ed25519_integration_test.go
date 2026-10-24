@@ -34,7 +34,12 @@ func edRegistration(t *testing.T, public ed25519.PublicKey, id []byte, challenge
 
 func edRegistrationCOSE(t *testing.T, cose, id []byte, challenge string, flags byte) []byte {
 	t.Helper()
-	auth := authData(flags|0x40, 0)
+	return edRegistrationCOSECounter(t, cose, id, challenge, flags, 0)
+}
+
+func edRegistrationCOSECounter(t *testing.T, cose, id []byte, challenge string, flags byte, count uint32) []byte {
+	t.Helper()
+	auth := authData(flags|0x40, count)
 	auth = append(auth, make([]byte, 16)...)
 	auth = binary.BigEndian.AppendUint16(auth, uint16(len(id)))
 	auth = append(auth, id...)

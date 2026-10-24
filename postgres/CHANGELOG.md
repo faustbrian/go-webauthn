@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Accept root-verified Ed25519 and explicit mixed ES256/Ed25519 profiles in
+  native passkey registration/signup, identified/preauthentication, discovery,
+  update, session-enrollment and removal-assertion participants. Preserve each
+  original ordered allowlist, verified credential algorithm and exact retained
+  retry/recovery identity; nil stays ES256-only and unsupported or duplicate
+  selections deny. Existing APIs, default consumers and installed migration
+  histories remain unchanged.
+
 - Add explicit self-user removal-assertion options and atomic verified assertion
   consumption plus credential removal in the native parent's sole Work. Both
   authenticating-key and distinct-key removal retain independent optimistic

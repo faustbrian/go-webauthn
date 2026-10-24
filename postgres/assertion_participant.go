@@ -60,7 +60,7 @@ func assertionIntent(i webauthn.CeremonyIntent, preauth bool) bool {
 }
 
 // AssertionCreation borrows the native store and the real root service's opaque
-// identified ES256 creation. It accepts no caller-assembled ceremony projection.
+// identified ES256/Ed25519 creation. No caller-assembled ceremony is accepted.
 // The parent owns primary/pool lifetime and must Discard every abandoned call.
 func (s *Store) AssertionCreation(input webauthn.CeremonyCreation) (*AssertionCreation, error) {
 	return s.assertionCreation(input, false)
@@ -132,7 +132,7 @@ func (s *Store) PreauthAssertionFinalization(input webauthn.AssertionTransition)
 
 func (s *Store) assertionFinalization(input webauthn.AssertionTransition, preauth bool) (*AssertionFinalization, error) {
 	m, err := input.Mutation()
-	if !s.usable() || err != nil || !assertionIntent(m.Ceremony.Intent, preauth) || !assertionContext(m.Context, preauth) || m.Ceremony.Intent.Context.ActorID != m.Context.ActorID || m.Before.Algorithm != int32(webauthn.ES256) || m.After.Algorithm != int32(webauthn.ES256) || m.Before.TenantID != m.Context.TenantID || m.Before.UserID != m.Context.UserID || m.After.TenantID != m.Context.TenantID || m.After.UserID != m.Context.UserID || !bytes.Equal(m.Before.UserHandle, m.Ceremony.Intent.UserHandle) {
+	if !s.usable() || err != nil || !assertionIntent(m.Ceremony.Intent, preauth) || !assertionContext(m.Context, preauth) || m.Ceremony.Intent.Context.ActorID != m.Context.ActorID || !registrationAlgorithm(m.Before.Algorithm, m.Ceremony.Intent.Algorithms) || m.After.Algorithm != m.Before.Algorithm || m.Before.TenantID != m.Context.TenantID || m.Before.UserID != m.Context.UserID || m.After.TenantID != m.Context.TenantID || m.After.UserID != m.Context.UserID || !bytes.Equal(m.Before.UserHandle, m.Ceremony.Intent.UserHandle) {
 		return nil, webauthn.Invalid{Field: "assertion_finalization"}
 	}
 	digest, err := assertionDigest(m)

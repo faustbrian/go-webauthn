@@ -318,13 +318,18 @@ func (s *registrationStore) FinalizeRegistration(ctx context.Context, t webauthn
 }
 
 func TestSignupRegistrationParticipationPostgres(t *testing.T) {
+	testSignupRegistrationParticipationPostgres(t, participantProfile{})
+}
+
+func testSignupRegistrationParticipationPostgres(t *testing.T, profile participantProfile) {
+	registrationResponse := profile.registration
 	ctx, pool, config, native := nativeFixture(t)
 	if _, err := pool.Raw().Exec(ctx, `CREATE TABLE participation_metadata(command_id text PRIMARY KEY)`); err != nil {
 		t.Fatal(err)
 	}
 	store := &registrationStore{Store: native, pool: pool, config: config, signupFlow: "original-signup-flow"}
 	key, _ := webauthn.NewChallengeDigestKey(bytes.Repeat([]byte{61}, 32))
-	svc, err := webauthn.New(webauthn.Config{TenantID: "tenant-a", RelyingParty: webauthn.RelyingParty{ID: "example.com", Name: "Signup", Origins: []string{"https://login.example.com"}, Version: 1}, ChallengeKey: key, MaximumDuration: 10 * time.Second}, webauthn.Dependencies{Store: store})
+	svc, err := webauthn.New(webauthn.Config{TenantID: "tenant-a", RelyingParty: webauthn.RelyingParty{ID: "example.com", Name: "Signup", Origins: []string{"https://login.example.com"}, Version: 1}, ChallengeKey: key, MaximumDuration: 10 * time.Second, Algorithms: profile.algorithms}, webauthn.Dependencies{Store: store})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +365,7 @@ func TestSignupRegistrationParticipationPostgres(t *testing.T) {
 	store.invalidParent = ""
 	record, _ := options.Ceremony()
 	challenge := optionChallenge(t, ctx, options.TransferJSON)
-	private, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	private := profile.key(t)
 	response := registrationResponse(t, private, bytes.Repeat([]byte{83}, 32), challenge, 0x45, 0)
 	request := func() webauthn.VerifyRegistrationRequest {
 		return webauthn.VerifyRegistrationRequest{Context: fresh(), CeremonyID: record.ID, Origin: "https://login.example.com", ExpectedVersion: 1, Response: response}
@@ -503,6 +508,11 @@ func TestSignupRegistrationUnknownPostgres(t *testing.T) {
 }
 
 func TestRegistrationParticipationPostgres(t *testing.T) {
+	testRegistrationParticipationPostgres(t, participantProfile{})
+}
+
+func testRegistrationParticipationPostgres(t *testing.T, profile participantProfile) {
+	registrationResponse := profile.registration
 	ctx, pool, config, native := nativeFixture(t)
 	if _, err := pool.Raw().Exec(ctx, `CREATE TABLE participation_metadata(command_id text PRIMARY KEY)`); err != nil {
 		t.Fatal(err)
@@ -510,6 +520,7 @@ func TestRegistrationParticipationPostgres(t *testing.T) {
 	store := &registrationStore{Store: native, pool: pool, config: config}
 	key, _ := webauthn.NewChallengeDigestKey(bytes.Repeat([]byte{61}, 32))
 	serviceConfig := webauthn.Config{TenantID: "tenant-a", RelyingParty: webauthn.RelyingParty{ID: "example.com", Name: "Participant", Origins: []string{"https://login.example.com"}, Version: 1}, ChallengeKey: key, MaximumDuration: 10 * time.Second}
+	serviceConfig.Algorithms = profile.algorithms
 	svc, err := webauthn.New(serviceConfig, webauthn.Dependencies{Store: store})
 	if err != nil {
 		t.Fatal(err)
@@ -574,7 +585,7 @@ func TestRegistrationParticipationPostgres(t *testing.T) {
 			}
 		})
 	}
-	private, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	private := profile.key(t)
 	for index, failure := range []string{"apply", "commit", "success", "parent-scope", "parent-intent"} {
 		t.Run("registration-"+failure, func(t *testing.T) {
 			options, err := begin()

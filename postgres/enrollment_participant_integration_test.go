@@ -5,8 +5,6 @@ package postgres_test
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
@@ -305,12 +303,18 @@ func (s *enrollmentStore) recover(ctx context.Context, scope webauthn.CeremonyCo
 }
 
 func TestEnrollmentParticipationPostgres(t *testing.T) {
+	testEnrollmentParticipationPostgres(t, participantProfile{})
+}
+
+func testEnrollmentParticipationPostgres(t *testing.T, profile participantProfile) {
+	registrationResponse, assertionResponse := profile.registration, profile.assertion
 	ctx, pool, config, native := nativeFixture(t)
 	if _, err := pool.Raw().Exec(ctx, `CREATE TABLE enrollment_metadata(command_id text PRIMARY KEY)`); err != nil {
 		t.Fatal(err)
 	}
 	key, _ := webauthn.NewChallengeDigestKey(bytes.Repeat([]byte{101}, 32))
 	cfg := webauthn.Config{TenantID: "tenant-a", RelyingParty: webauthn.RelyingParty{ID: "example.com", Name: "Enrollment", Origins: []string{"https://login.example.com"}, Version: 1}, ChallengeKey: key, MaximumDuration: 10 * time.Second}
+	cfg.Algorithms = profile.algorithms
 	initial, err := webauthn.New(cfg, webauthn.Dependencies{Store: native})
 	if err != nil {
 		t.Fatal(err)
@@ -325,7 +329,7 @@ func TestEnrollmentParticipationPostgres(t *testing.T) {
 		return webauthn.CeremonyContext{CommandID: id, TenantID: "tenant-a", UserID: "user-a", ActorID: "user-a", CorrelationID: "enrollment"}
 	}
 	handle, id := bytes.Repeat([]byte{102}, 32), bytes.Repeat([]byte{103}, 32)
-	private, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	private := profile.key(t)
 	options, err := initial.BeginRegistration(ctx, webauthn.BeginRegistrationRequest{Context: fresh(), UserHandle: handle, Origin: "https://login.example.com", ResidentKeyRequired: true})
 	if err != nil {
 		t.Fatal(err)
@@ -379,7 +383,7 @@ func TestEnrollmentParticipationPostgres(t *testing.T) {
 		ch := optionChallenge(t, ctx, store.options.TransferJSON)
 		nextID := make([]byte, 32)
 		_, _ = rand.Read(nextID)
-		nextKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		nextKey := profile.key(t)
 		return webauthn.VerifyRegistrationRequest{Context: fresh(), CeremonyID: r.ID, Origin: "https://login.example.com", ExpectedVersion: 1, Response: registrationResponse(t, nextKey, nextID, ch, 0x45, 0)}
 	}
 	for _, defect := range []string{"UV", "counter"} {
@@ -405,7 +409,7 @@ func TestEnrollmentParticipationPostgres(t *testing.T) {
 		})
 	}
 	t.Run("genuine-backup-counter-risk-denies", func(t *testing.T) {
-		key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		key := profile.key(t)
 		credentialID := bytes.Repeat([]byte{109}, 32)
 		o, e := initial.BeginRegistration(ctx, webauthn.BeginRegistrationRequest{Context: fresh(), UserHandle: handle, Origin: "https://login.example.com", ResidentKeyRequired: true})
 		if e != nil {
@@ -457,7 +461,7 @@ func TestEnrollmentParticipationPostgres(t *testing.T) {
 			unconsumed(t, req.CeremonyID)
 		})
 	}
-	for _, defect := range []string{"command", "correlation", "handle", "resident", "origin", "rp", "rp-version", "extensions"} {
+	for _, defect := range []string{"command", "correlation", "handle", "resident", "origin", "rp", "rp-version", "extensions", "algorithms"} {
 		t.Run("opaque-input-"+defect, func(t *testing.T) {
 			req := request(t)
 			before := counts()
@@ -472,6 +476,9 @@ func TestEnrollmentParticipationPostgres(t *testing.T) {
 			}
 			if defect == "extensions" {
 				alternate.Extensions.CredentialProperties = true
+			}
+			if defect == "algorithms" {
+				alternate.Algorithms = []webauthn.Algorithm{webauthn.ES256, webauthn.EdDSA}
 			}
 			var e error
 			store.registrationService, e = webauthn.New(alternate, webauthn.Dependencies{Store: store})
@@ -588,7 +595,7 @@ func TestEnrollmentParticipationPostgres(t *testing.T) {
 		}
 		ch := optionChallenge(t, ctx, store.options.TransferJSON)
 		nextID := bytes.Repeat([]byte{104}, 32)
-		nextKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		nextKey := profile.key(t)
 		registered, e := store.service.VerifyRegistration(ctx, webauthn.VerifyRegistrationRequest{Context: fresh(), CeremonyID: r.ID, Origin: "https://login.example.com", ExpectedVersion: 1, Response: registrationResponse(t, nextKey, nextID, ch, 0x45, 0)})
 		if e != nil {
 			var invalid webauthn.Invalid

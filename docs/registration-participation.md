@@ -8,14 +8,20 @@ domain store. The root protocol service remains adapter-neutral and unchanged.
 ## Selected contract
 
 Only self-service existing-account enrollment is selected: tenant-bound,
-resident-required creation, mandatory UV, `none` attestation and ES256. The
-parent contributor descriptor is `passkey/postgres`, contract
+resident-required creation, mandatory UV, `none` attestation and an explicit
+ES256/Ed25519 algorithm profile. Nil retains the original ES256-only default;
+explicit profiles contain one or both supported algorithms without duplicates.
+Their original order and exact verified credential membership remain bound
+through finalization and recovery. RS256 is not selected by this participant.
+The parent contributor descriptor is `passkey/postgres`, contract
 `identity.passkey`, version 1. Operations are
 `identity.passkey.register-options` and `identity.passkey.register-verify`, each
 with schema `<operation>.native-v1`, schema version 1 and required record ID.
 Each primary record has a 0-to-1 creation lifecycle. Signup, assertion/signin,
-management, HTTP, shared-RP tenancy and other algorithms remain unsupported by
+management, HTTP and shared-RP tenancy remain unsupported by
 this seam. Standalone WebAuthn services retain their broader selected profiles.
+Downstream native passkey owners must independently select and prove a compatible
+profile; protocol support does not automatically enable Ed25519 in those owners.
 
 The parent's concrete passkey adapter implements the root `Store` contract.
 It borrows the actual native protocol store for lookup and participation; it
@@ -77,8 +83,11 @@ terminal history is returned through the original coordinator. Recovery cannot
 create options, re-reveal a challenge, consume proof again or renew authority.
 
 The [native consumer test](../postgres/registration_participant_integration_test.go)
-exercises protocol participation using real PostgreSQL, a real ES256 response,
+exercises protocol participation using real PostgreSQL, genuine ES256/Ed25519 responses,
 the public coordinator and parent-only test metadata. That fixture is not the
 actual fresh-authenticated passkey workflow and cannot qualify that milestone.
+The [algorithm-profile cases](../postgres/participant_algorithms_integration_test.go)
+also cover exact mixed-profile selection, unselected algorithms and unchanged
+original-profile retry/recovery.
 Complete passkey identity/factor/risk/session composition remains its owner's
 responsibility; no boolean authorization or stub unlocks it.

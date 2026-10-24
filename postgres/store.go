@@ -323,7 +323,7 @@ func (s *Store) LoadDiscoverableCredential(ctx context.Context, q webauthn.Looku
 		// retries remain in their original anonymous service/flow. Neither a
 		// caller-selected target nor a JSON actor alone selects that history.
 		var ceremony webauthn.CeremonyRecord
-		if target == "" || actor != target || string(c.UserID) != target || c.Algorithm != int32(webauthn.ES256) || c.Version == 0 || len(retainedCeremony) > 262144 || json.Unmarshal(retainedCeremony, &ceremony) != nil || !discoverableAssertionIntent(ceremony.Intent) || ceremony.ID != q.CeremonyID || ceremony.Intent.RPID != q.RPID || ceremony.Intent.Context.TenantID != q.Context.TenantID || ceremony.Intent.Context.ActorID != q.Context.ActorID || ceremony.Intent.Context.AnonymousFlowID != q.Context.AnonymousFlowID || ceremony.Version == 0 || ceremony.ChallengeDigest == ([32]byte{}) || ceremony.ExpiresAt.IsZero() {
+		if target == "" || actor != target || string(c.UserID) != target || c.Version == 0 || len(retainedCeremony) > 262144 || json.Unmarshal(retainedCeremony, &ceremony) != nil || !discoverableAssertionIntent(ceremony.Intent) || !registrationAlgorithm(c.Algorithm, ceremony.Intent.Algorithms) || ceremony.ID != q.CeremonyID || ceremony.Intent.RPID != q.RPID || ceremony.Intent.Context.TenantID != q.Context.TenantID || ceremony.Intent.Context.ActorID != q.Context.ActorID || ceremony.Intent.Context.AnonymousFlowID != q.Context.AnonymousFlowID || ceremony.Version == 0 || ceremony.ChallengeDigest == ([32]byte{}) || ceremony.ExpiresAt.IsZero() {
 			return webauthn.Credential{}, webauthn.Denied{}
 		}
 	}

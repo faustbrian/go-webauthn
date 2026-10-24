@@ -5,9 +5,6 @@ package postgres_test
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -100,6 +97,11 @@ func (s *discoverableAssertionStore) Recover(ctx context.Context, r webauthn.Rec
 }
 
 func TestDiscoverableAssertionParticipationPostgres(t *testing.T) {
+	testDiscoverableAssertionParticipationPostgres(t, participantProfile{})
+}
+
+func testDiscoverableAssertionParticipationPostgres(t *testing.T, profile participantProfile) {
+	registrationResponse, assertionResponse := profile.registration, profile.assertion
 	ctx, pool, config, native := nativeFixture(t)
 	if _, err := pool.Raw().Exec(ctx, `CREATE TABLE assertion_participation_metadata(command_id text PRIMARY KEY)`); err != nil {
 		t.Fatal(err)
@@ -107,6 +109,7 @@ func TestDiscoverableAssertionParticipationPostgres(t *testing.T) {
 	store := &discoverableAssertionStore{assertionStore: &assertionStore{Store: native, pool: pool, config: config, preauth: true, discoverable: true}, create: native.DiscoverableAssertionCreation, finalize: native.DiscoverableAssertionFinalization}
 	key, _ := webauthn.NewChallengeDigestKey(bytes.Repeat([]byte{71}, 32))
 	serviceConfig := webauthn.Config{TenantID: "tenant-a", RelyingParty: webauthn.RelyingParty{ID: "example.com", Name: "Discoverable Participant", Origins: []string{"https://login.example.com"}, Version: 1}, ChallengeKey: key, MaximumDuration: 10 * time.Second}
+	serviceConfig.Algorithms = profile.algorithms
 	svc, err := webauthn.NewDiscoverable(serviceConfig, webauthn.Dependencies{Store: store})
 	if err != nil {
 		t.Fatal(err)
@@ -124,7 +127,7 @@ func TestDiscoverableAssertionParticipationPostgres(t *testing.T) {
 		return c
 	}
 	handle, id := bytes.Repeat([]byte{72}, 32), bytes.Repeat([]byte{73}, 32)
-	private, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	private := profile.key(t)
 	opts, err := registration.BeginRegistration(ctx, webauthn.BeginRegistrationRequest{Context: fresh(false), UserHandle: handle, Origin: serviceConfig.RelyingParty.Origins[0], ResidentKeyRequired: true})
 	if err != nil {
 		t.Fatal(err)

@@ -11,6 +11,18 @@ These explicit opaque participants do not independently commit, authenticate
 an identity or replace the parent's current authority and session workflow.
 Standalone store APIs retain their existing behavior.
 
+All native registration/signup, identified/preauthentication, discovery, update,
+session-enrollment and removal-assertion participants accept the root verifier's
+ES256 or Ed25519 profiles, including an explicit ordered allowlist containing
+both. Nil remains the legacy ES256-only profile; empty lists, duplicates, RSA
+and unknown algorithms deny. The root still owns COSE/key/signature verification;
+the participant requires the verified credential's algorithm to belong to the
+original ceremony and never changes its algorithm during assertion finalization.
+Profile order and nil/explicit representation remain part of the original intent,
+command digest and recovery identity. Changing the root's selected profile cannot
+reinterpret an in-flight ceremony. These additive selections require no schema
+migration and grant no parent identity/session authority.
+
 Session-bound additional enrollment explicitly selects three profiles, all
 self-human, owner `passkey`, schema version 1 and required record:
 
@@ -52,7 +64,7 @@ The parent still owns original session/action commitment, CSRF, current
 directory/passkey/MFA/policy/risk admission, mappings, labels and lifecycle.
 
 `Store.UpdateAssertionCreation` and `Store.UpdateAssertionFinalization` explicitly
-select the self-human identified ES256/UV assertion participant for passkey
+select the self-human identified ES256/Ed25519 UV assertion participant for passkey
 rename. Both phases use the protected `identity.passkey.update` action. Options
 require schema `identity.passkey.update.options-v1` and lifecycle
 `passkey.reauthentication.started.v1` from 0 to 1. Finalization

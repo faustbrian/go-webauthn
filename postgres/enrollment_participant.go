@@ -170,7 +170,7 @@ func enrollmentLifecycle(stage int, l *kernel.LifecyclePlan) bool {
 }
 
 // EnrollmentAssertionCreation borrows the real root service's opaque identified
-// ES256 creation. No caller-assembled ceremony or boolean freshness is accepted.
+// ES256/Ed25519 creation. Caller-assembled ceremonies and boolean freshness deny.
 func (s *Store) EnrollmentAssertionCreation(input webauthn.CeremonyCreation) (*EnrollmentAssertionCreation, error) {
 	p, err := s.assertionCreation(input, false)
 	if err != nil {
@@ -644,7 +644,7 @@ func (s *Store) loadEnrollmentAssertionCredential(ctx context.Context, q webauth
 	}
 	var c webauthn.Credential
 	var r webauthn.CeremonyRecord
-	if len(before) > 32768 || len(source) > 262144 || json.Unmarshal(before, &c) != nil || json.Unmarshal(source, &r) != nil || !assertionIntent(r.Intent, false) || r.ID != q.CeremonyID || r.Intent.Context.CommandID != identity.CommandID(r.ID) || r.Intent.Context.TenantID != q.Context.TenantID || r.Intent.Context.UserID != q.Context.UserID || r.Intent.Context.ActorID != q.Context.ActorID || r.Intent.RPID != q.RPID || r.Version != 1 || r.ChallengeDigest == ([32]byte{}) || r.ExpiresAt.IsZero() || c.TenantID != q.Context.TenantID || c.UserID != q.Context.UserID || c.RPID != q.RPID || c.Algorithm != int32(webauthn.ES256) || c.Version == 0 || len(c.PublicKey) == 0 || !bytes.Equal(c.ID, id) || !bytes.Equal(c.UserHandle, r.Intent.UserHandle) {
+	if len(before) > 32768 || len(source) > 262144 || json.Unmarshal(before, &c) != nil || json.Unmarshal(source, &r) != nil || !assertionIntent(r.Intent, false) || r.ID != q.CeremonyID || r.Intent.Context.CommandID != identity.CommandID(r.ID) || r.Intent.Context.TenantID != q.Context.TenantID || r.Intent.Context.UserID != q.Context.UserID || r.Intent.Context.ActorID != q.Context.ActorID || r.Intent.RPID != q.RPID || r.Version != 1 || r.ChallengeDigest == ([32]byte{}) || r.ExpiresAt.IsZero() || c.TenantID != q.Context.TenantID || c.UserID != q.Context.UserID || c.RPID != q.RPID || !registrationAlgorithm(c.Algorithm, r.Intent.Algorithms) || c.Version == 0 || len(c.PublicKey) == 0 || !bytes.Equal(c.ID, id) || !bytes.Equal(c.UserHandle, r.Intent.UserHandle) {
 		return webauthn.Credential{}, true, webauthn.Denied{}
 	}
 	return c, true, nil

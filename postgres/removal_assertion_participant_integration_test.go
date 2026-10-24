@@ -5,8 +5,7 @@ package postgres_test
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
+	"crypto"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -36,12 +35,18 @@ func removalAssertionOperation(finish bool) identity.FeatureOperation {
 // This is protocol composition proof, not native session, last-key/recovery,
 // mapping, credential-reference or policy admission proof.
 func TestRemovalAssertionParticipationPostgres(t *testing.T) {
+	testRemovalAssertionParticipationPostgres(t, participantProfile{})
+}
+
+func testRemovalAssertionParticipationPostgres(t *testing.T, profile participantProfile) {
+	registrationResponse, assertionResponse := profile.registration, profile.assertion
 	ctx, pool, config, native := nativeFixture(t)
 	if _, err := pool.Raw().Exec(ctx, `CREATE TABLE assertion_participation_metadata(command_id text PRIMARY KEY)`); err != nil {
 		t.Fatal(err)
 	}
 	digest, _ := webauthn.NewChallengeDigestKey(bytes.Repeat([]byte{101}, 32))
 	serviceConfig := webauthn.Config{TenantID: "tenant-a", RelyingParty: webauthn.RelyingParty{ID: "example.com", Name: "Removal Participant", Origins: []string{"https://login.example.com"}, Version: 1}, ChallengeKey: digest, MaximumDuration: 10 * time.Second}
+	serviceConfig.Algorithms = profile.algorithms
 	registration, err := webauthn.New(serviceConfig, webauthn.Dependencies{Store: native})
 	if err != nil {
 		t.Fatal(err)
@@ -51,12 +56,9 @@ func TestRemovalAssertionParticipationPostgres(t *testing.T) {
 		return webauthn.CeremonyContext{CommandID: id, TenantID: "tenant-a", UserID: "user-a", ActorID: "user-a", CorrelationID: "removal-assertion-test"}
 	}
 	handle := bytes.Repeat([]byte{102}, 32)
-	register := func(t *testing.T) (webauthn.Credential, *ecdsa.PrivateKey) {
+	register := func(t *testing.T) (webauthn.Credential, crypto.Signer) {
 		t.Helper()
-		private, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		if err != nil {
-			t.Fatal(err)
-		}
+		private := profile.key(t)
 		id := make([]byte, 32)
 		if _, err := rand.Read(id); err != nil {
 			t.Fatal(err)

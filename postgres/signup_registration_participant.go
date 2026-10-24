@@ -30,8 +30,8 @@ func signupRegistrationDigest(flow string, intent any) ([32]byte, error) {
 	}{"passkey.registration.signup-v1", flow, intent})
 }
 
-// SignupRegistrationCreation borrows real root-issued resident-required ES256
-// creation for the exact anonymous register-options .signup-v1 parent. flow is
+// SignupRegistrationCreation borrows real root-issued resident-required
+// ES256/Ed25519 creation for the exact anonymous register-options .signup-v1 parent. flow is
 // the original trusted session pre-auth flow, not a new authenticated subject.
 // The root context holds the preallocated prospective user and configured
 // service actor; parent UserID must stay empty and registration.user must bind
@@ -62,7 +62,7 @@ func (s *Store) SignupRegistrationCreation(input webauthn.CeremonyCreation, flow
 func (s *Store) SignupRegistrationFinalization(input webauthn.RegistrationTransition, flow string) (*RegistrationFinalization, error) {
 	m, err := input.Mutation()
 	i := m.Ceremony.Intent
-	if !s.usable() || err != nil || i.Kind != "create" || !i.ResidentKeyRequired || len(i.UserHandle) != 32 || !signupRegistrationContext(m.Context, flow) || !signupRegistrationContext(i.Context, flow) || i.Context.TenantID != m.Context.TenantID || i.Context.UserID != m.Context.UserID || i.Context.ActorID != m.Context.ActorID || !registrationAlgorithms(i.Algorithms) || m.Credential.Algorithm != int32(webauthn.ES256) || m.Credential.TenantID != m.Context.TenantID || m.Credential.UserID != m.Context.UserID || m.Credential.Version != 1 || m.Credential.RPID != i.RPID {
+	if !s.usable() || err != nil || i.Kind != "create" || !i.ResidentKeyRequired || len(i.UserHandle) != 32 || !signupRegistrationContext(m.Context, flow) || !signupRegistrationContext(i.Context, flow) || i.Context.TenantID != m.Context.TenantID || i.Context.UserID != m.Context.UserID || i.Context.ActorID != m.Context.ActorID || !registrationAlgorithm(m.Credential.Algorithm, i.Algorithms) || m.Credential.TenantID != m.Context.TenantID || m.Credential.UserID != m.Context.UserID || m.Credential.Version != 1 || m.Credential.RPID != i.RPID {
 		return nil, webauthn.Invalid{Field: "signup_registration_finalization"}
 	}
 	digest, err := signupRegistrationDigest(flow, m)

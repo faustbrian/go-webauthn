@@ -5,8 +5,7 @@ package postgres_test
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
+	"crypto"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -24,12 +23,18 @@ import (
 // not by relabeling standalone registration effects. Identity signup/session and
 // last-key policy remain outside this protocol-only consumer fixture.
 func TestRemovalRemainingNativeProvenancePostgres(t *testing.T) {
+	testRemovalRemainingNativeProvenancePostgres(t, participantProfile{})
+}
+
+func testRemovalRemainingNativeProvenancePostgres(t *testing.T, selected participantProfile) {
+	registrationResponse, assertionResponse := selected.registration, selected.assertion
 	ctx, pool, config, native := nativeFixture(t)
 	if _, err := pool.Raw().Exec(ctx, `CREATE TABLE participation_metadata(command_id text PRIMARY KEY); CREATE TABLE assertion_participation_metadata(command_id text PRIMARY KEY)`); err != nil {
 		t.Fatal(err)
 	}
 	digest, _ := webauthn.NewChallengeDigestKey(bytes.Repeat([]byte{121}, 32))
 	serviceConfig := webauthn.Config{TenantID: "tenant-a", RelyingParty: webauthn.RelyingParty{ID: "example.com", Name: "Remaining Native Provenance", Origins: []string{"https://login.example.com"}, Version: 1}, ChallengeKey: digest, MaximumDuration: 10 * time.Second}
+	serviceConfig.Algorithms = selected.algorithms
 	fresh := func(user identity.UserID, actor identity.ActorID) webauthn.CeremonyContext {
 		id, err := identity.NewCommandID()
 		if err != nil {
@@ -37,16 +42,13 @@ func TestRemovalRemainingNativeProvenancePostgres(t *testing.T) {
 		}
 		return webauthn.CeremonyContext{CommandID: id, TenantID: "tenant-a", UserID: user, ActorID: actor, CorrelationID: "remaining-native-provenance"}
 	}
-	register := func(t *testing.T, store *registrationStore, user identity.UserID, actor identity.ActorID, handle []byte) (webauthn.Credential, *ecdsa.PrivateKey, identity.CommandID) {
+	register := func(t *testing.T, store *registrationStore, user identity.UserID, actor identity.ActorID, handle []byte) (webauthn.Credential, crypto.Signer, identity.CommandID) {
 		t.Helper()
 		svc, err := webauthn.New(serviceConfig, webauthn.Dependencies{Store: store})
 		if err != nil {
 			t.Fatal(err)
 		}
-		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		if err != nil {
-			t.Fatal(err)
-		}
+		key := selected.key(t)
 		id := make([]byte, 32)
 		if _, err := rand.Read(id); err != nil {
 			t.Fatal(err)

@@ -40,8 +40,8 @@ type RegistrationFinalization struct {
 }
 
 // RegistrationCreation borrows the existing protocol store and opaque creation.
-// Only authenticated resident-required ES256 enrollment is selected. Creation
-// must come from the real root service configured with that algorithm profile.
+// Only authenticated resident-required ES256/Ed25519 enrollment is selected.
+// Creation must come from the real root service configured with that profile.
 // The caller owns pool lifetime and must Discard on all abandoned/failure paths.
 func (s *Store) RegistrationCreation(input webauthn.CeremonyCreation) (*RegistrationCreation, error) {
 	i, err := input.Intent()
@@ -60,7 +60,7 @@ func (s *Store) RegistrationCreation(input webauthn.CeremonyCreation) (*Registra
 // It does not commit independently or expose a provisional verified result.
 func (s *Store) RegistrationFinalization(input webauthn.RegistrationTransition) (*RegistrationFinalization, error) {
 	m, err := input.Mutation()
-	if !s.usable() || err != nil || m.Ceremony.Intent.Kind != "create" || !m.Ceremony.Intent.ResidentKeyRequired || !registrationContext(m.Context) || !registrationAlgorithms(m.Ceremony.Intent.Algorithms) || m.Credential.Algorithm != int32(webauthn.ES256) || m.Credential.TenantID != m.Context.TenantID || m.Credential.UserID != m.Context.UserID || m.Credential.Version != 1 {
+	if !s.usable() || err != nil || m.Ceremony.Intent.Kind != "create" || !m.Ceremony.Intent.ResidentKeyRequired || !registrationContext(m.Context) || !registrationAlgorithm(m.Credential.Algorithm, m.Ceremony.Intent.Algorithms) || m.Credential.TenantID != m.Context.TenantID || m.Credential.UserID != m.Context.UserID || m.Credential.Version != 1 {
 		return nil, webauthn.Invalid{Field: "registration_finalization"}
 	}
 	digest, err := registrationDigest(m)
@@ -71,7 +71,36 @@ func (s *Store) RegistrationFinalization(input webauthn.RegistrationTransition) 
 }
 
 func registrationAlgorithms(selected []webauthn.Algorithm) bool {
-	return selected == nil || len(selected) == 1 && selected[0] == webauthn.ES256
+	if selected == nil {
+		return true
+	}
+	if len(selected) == 0 || len(selected) > 2 {
+		return false
+	}
+	for index, algorithm := range selected {
+		if algorithm != webauthn.ES256 && algorithm != webauthn.EdDSA || index > 0 && algorithm == selected[0] {
+			return false
+		}
+	}
+	return true
+}
+
+// The root verifier owns exact COSE key/signature verification. Participants
+// select only its ES256/Ed25519 passkey profile and never reinterpret nil's
+// legacy ES256 default or normalize the original digest/recovery input.
+func registrationAlgorithm(algorithm int32, selected []webauthn.Algorithm) bool {
+	if !registrationAlgorithms(selected) {
+		return false
+	}
+	if selected == nil {
+		return algorithm == int32(webauthn.ES256)
+	}
+	for _, allowed := range selected {
+		if algorithm == int32(allowed) {
+			return true
+		}
+	}
+	return false
 }
 func registrationContext(c webauthn.CeremonyContext) bool {
 	_, err := identity.ParseCommandID(string(c.CommandID))
