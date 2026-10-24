@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Add explicit self-user removal-assertion options and atomic verified assertion
+  consumption plus credential removal in the native parent's sole Work. Both
+  authenticating-key and distinct-key removal retain independent optimistic
+  versions, original assertion expiry and exact final successor fences. Install
+  additive migration 6 before selecting this profile; it retains source and target
+  snapshots without changing existing history or password-proof deletion.
+  Session, remaining usable key, policy and identity effects remain parent-owned.
+  A same-Work remaining-credential fence verifies live protocol state against
+  retained original resident-registration provenance without treating historical
+  ceremony expiry as credential expiry. Unknown outcomes release no verification
+  and recover only the original command.
+
 - Add explicitly selected session-bound additional enrollment: original UV
   assertion options, atomic assertion consumption plus registration options,
   and matching registration finalization share the native parent's Work.

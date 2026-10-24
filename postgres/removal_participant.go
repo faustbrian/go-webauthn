@@ -146,6 +146,32 @@ func (p *CredentialRemoval) Apply(ctx context.Context, w kernel.Work, owner kern
 	if err := p.bind(ctx, w, owner, c, true); err != nil {
 		return err
 	}
+	if err := p.applyRemoval(ctx, w); err != nil {
+		return err
+	}
+	s := p.state
+	b, fp, _, err := w.FeatureCommandIdentity(owner)
+	if err != nil || b != s.binding {
+		return webauthn.Invalid{Field: "removal_custody"}
+	}
+	s.fingerprint = fp
+	// Removal has no ceremony. JSON null and empty ceremony_id occupy the
+	// existing protocol effect slots without inventing a ceremony or journal.
+	n, err := w.Exec(ctx, `INSERT INTO webauthn.effects(command_id,tenant_id,user_id,actor_id,purpose,record_id,fingerprint,ceremony_id,ceremony,before_credential,after_credential) VALUES($1,$2,$3,$4,$5,$6,$7,'','null'::jsonb,$8::jsonb,$9::jsonb) ON CONFLICT DO NOTHING`, string(b.CommandID), string(b.TenantID), string(b.UserID), string(b.ActorID), b.OperationID, b.RecordID, fp[:], string(s.before), string(s.after))
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return webauthn.Conflict{}
+	}
+	s.applied = true
+	return p.Check(ctx, w, owner, c)
+}
+
+// Both password-proof deletion and the explicit compound UV profile use this
+// same terminal CAS. The caller supplies the genuine verified successor when
+// the assertion itself advances the removed row; effect ownership stays outside.
+func (p *CredentialRemoval) applyRemoval(ctx context.Context, w kernel.Work) error {
 	s := p.state
 	r := s.request
 	if err := (&phase{binding: s.binding}).current(ctx, w); err != nil {
@@ -199,22 +225,7 @@ func (p *CredentialRemoval) Apply(ctx context.Context, w kernel.Work, owner kern
 	if n != 1 {
 		return webauthn.Conflict{}
 	}
-	b, fp, _, err := w.FeatureCommandIdentity(owner)
-	if err != nil || b != s.binding {
-		return webauthn.Invalid{Field: "removal_custody"}
-	}
-	s.fingerprint = fp
-	// Removal has no ceremony. JSON null and empty ceremony_id occupy the
-	// existing protocol effect slots without inventing a ceremony or journal.
-	n, err = w.Exec(ctx, `INSERT INTO webauthn.effects(command_id,tenant_id,user_id,actor_id,purpose,record_id,fingerprint,ceremony_id,ceremony,before_credential,after_credential) VALUES($1,$2,$3,$4,$5,$6,$7,'','null'::jsonb,$8::jsonb,$9::jsonb) ON CONFLICT DO NOTHING`, string(b.CommandID), string(b.TenantID), string(b.UserID), string(b.ActorID), b.OperationID, b.RecordID, fp[:], string(s.before), string(s.after))
-	if err != nil {
-		return err
-	}
-	if n != 1 {
-		return webauthn.Conflict{}
-	}
-	s.applied = true
-	return p.Check(ctx, w, owner, c)
+	return nil
 }
 
 // Check repeats exact successor and active-subject/mapping fences in the

@@ -35,9 +35,13 @@ type assertionOwner struct {
 	command                                  identity.Command
 	creation                                 *webauthnpg.AssertionCreation
 	finalization                             *webauthnpg.AssertionFinalization
+	removalFinalization                      *webauthnpg.RemovalAssertionFinalization
 	store                                    *webauthnpg.Store
 	discoverable                             bool
 	update                                   bool
+	removal                                  bool
+	recoveryStatus                           *kernel.RecoveryStatus
+	remainingID                              []byte
 	lifecycle                                kernel.LifecyclePlan
 	afterApply                               func(context.Context, kernel.Work, identity.Command) error
 	failApply, failCommit, foreign, withdraw bool
@@ -47,6 +51,9 @@ func (*assertionOwner) Descriptor() kernel.ContributorDescriptor {
 	return kernel.ContributorDescriptor{Owner: "passkey/postgres", ContractID: "identity.passkey", Version: 1}
 }
 func (p *assertionOwner) FeatureOperations() []identity.FeatureOperation {
+	if p.removal {
+		return []identity.FeatureOperation{removalAssertionOperation(false), removalAssertionOperation(true)}
+	}
 	if p.update {
 		return []identity.FeatureOperation{updateAssertionOperation(false), updateAssertionOperation(true)}
 	}
@@ -80,6 +87,9 @@ func (p *assertionOwner) ValidateFeatureCommand(c identity.Command, plan kernel.
 	if p.finalization != nil {
 		return p.finalization.Validate(c, plan)
 	}
+	if p.removalFinalization != nil {
+		return p.removalFinalization.Validate(c, plan)
+	}
 	return identity.InvalidInputError{Field: "test_transition"}
 }
 func (p *assertionOwner) ApplyFeature(ctx context.Context, w kernel.Work, c identity.Command) (identity.FeatureReceipt, error) {
@@ -90,11 +100,18 @@ func (p *assertionOwner) ApplyFeature(ctx context.Context, w kernel.Work, c iden
 	var err error
 	if p.creation != nil {
 		err = p.creation.Apply(ctx, w, owner, c)
+	} else if p.removalFinalization != nil {
+		err = p.removalFinalization.Apply(ctx, w, owner, c)
 	} else {
 		err = p.finalization.Apply(ctx, w, owner, c)
 	}
 	if err != nil {
 		return identity.FeatureReceipt{}, err
+	}
+	if p.removalFinalization != nil && p.remainingID != nil {
+		if _, err := p.removalFinalization.CheckRemainingCredential(ctx, w, owner, c, p.remainingID); err != nil {
+			return identity.FeatureReceipt{}, err
+		}
 	}
 	b, _, _, err := w.FeatureScope(p)
 	if err != nil {
@@ -126,6 +143,14 @@ func (p *assertionOwner) CheckFeatureCommit(ctx context.Context, w kernel.Work, 
 	if p.creation != nil {
 		return p.creation.Check(ctx, w, p, c)
 	}
+	if p.removalFinalization != nil {
+		if p.remainingID != nil {
+			if _, err := p.removalFinalization.CheckRemainingCredential(ctx, w, p, c, p.remainingID); err != nil {
+				return err
+			}
+		}
+		return p.removalFinalization.Check(ctx, w, p, c)
+	}
 	return p.finalization.Check(ctx, w, p, c)
 }
 func (p *assertionOwner) RecoverParticipant(ctx context.Context, w kernel.RecoveryWork) (kernel.RecoveryStatus, error) {
@@ -135,6 +160,9 @@ func (p *assertionOwner) RecoverParticipant(ctx context.Context, w kernel.Recove
 		recoverProtocol = p.store.RecoverUpdateAssertion
 		recoverOther = p.store.RecoverAssertion
 	}
+	if p.removal {
+		recoverProtocol = p.store.RecoverRemovalAssertion
+	}
 	if _, err := recoverOther(ctx, w, p); err == nil {
 		return kernel.RecoveryUnknown, errors.New("foreign assertion profile admitted recovery")
 	}
@@ -142,6 +170,9 @@ func (p *assertionOwner) RecoverParticipant(ctx context.Context, w kernel.Recove
 		return kernel.RecoveryUnknown, errors.New("foreign assertion owner admitted recovery")
 	}
 	protocol, err := recoverProtocol(ctx, w, p)
+	if p.recoveryStatus != nil {
+		*p.recoveryStatus = protocol
+	}
 	if err != nil || protocol != kernel.RecoveryNotCommitted {
 		return protocol, err
 	}
@@ -170,6 +201,8 @@ type assertionStore struct {
 	preauth                                  bool
 	discoverable                             bool
 	update                                   bool
+	removal                                  bool
+	removalTarget                            webauthnpg.RemovalRequest
 	generationOffset                         time.Duration
 	afterApply                               func(context.Context, kernel.Work, identity.Command) error
 	failApply, failCommit, foreign, withdraw bool
@@ -178,6 +211,9 @@ type assertionStore struct {
 	observeFinalization                      func(*webauthnpg.AssertionFinalization, identity.CommandResult)
 	observeTransition                        func(webauthn.AssertionTransition)
 	finalResult                              func(identity.CommandResult) identity.CommandResult
+	observeRemoval                           func(*webauthnpg.RemovalAssertionFinalization, identity.CommandResult)
+	recoveredProtocol                        kernel.RecoveryStatus
+	remainingID                              []byte
 }
 
 func (s *assertionStore) coordinator(p *assertionOwner) (*kernel.Coordinator, *kernel.ContributorRegistry, error) {
@@ -204,14 +240,24 @@ func (s *assertionStore) execute(ctx context.Context, p *assertionOwner, scope w
 	op := assertionOperation(p.finalization != nil)
 	p.discoverable = s.discoverable
 	p.update = s.update
+	p.removal = s.removal
 	if s.update {
 		op = updateAssertionOperation(p.finalization != nil)
+	}
+	if s.removal {
+		op = removalAssertionOperation(p.removalFinalization != nil)
 	}
 	lifecycle := kernel.LifecyclePlan{EventType: op.OperationID + ".v1", AfterVersion: 1}
 	if s.update {
 		lifecycle.EventType = "passkey.reauthentication.started.v1"
 		if p.finalization != nil {
 			lifecycle = kernel.LifecyclePlan{EventType: "identity.passkey.rename_credential", BeforeVersion: 7, AfterVersion: 8}
+		}
+	}
+	if s.removal {
+		lifecycle.EventType = "passkey.reauthentication.started.v1"
+		if p.removalFinalization != nil {
+			lifecycle = kernel.LifecyclePlan{EventType: "identity.passkey.remove_credential", BeforeVersion: 7, AfterVersion: 8}
 		}
 	}
 	if s.discoverable && p.finalization == nil {
@@ -227,6 +273,11 @@ func (s *assertionStore) execute(ctx context.Context, p *assertionOwner, scope w
 		}
 	}
 	switch s.invalidParent {
+	case "profile":
+		if s.removal {
+			op.SchemaID = "identity.passkey.delete.native-v1"
+			b.SchemaID = op.SchemaID
+		}
 	case "scope":
 		b.CorrelationID = "different-valid-parent-correlation"
 	case "tenant":
@@ -262,6 +313,7 @@ func (s *assertionStore) execute(ctx context.Context, p *assertionOwner, scope w
 	}
 	p.command, p.store, p.failApply, p.failCommit, p.foreign, p.withdraw = c, s.Store, s.failApply, s.failCommit, s.foreign, s.withdraw
 	p.afterApply = s.afterApply
+	p.remainingID = bytes.Clone(s.remainingID)
 	coordinator, r, err := s.coordinator(p)
 	if err != nil {
 		return identity.CommandResult{}, err
@@ -315,6 +367,9 @@ func (s *assertionStore) CreateCeremony(ctx context.Context, c webauthn.Ceremony
 	if s.update {
 		create = s.Store.UpdateAssertionCreation
 	}
+	if s.removal {
+		create = s.Store.RemovalAssertionCreation
+	}
 	if s.invalidParent == "profile" {
 		create = s.Store.UpdateAssertionCreation
 		if s.update {
@@ -341,6 +396,31 @@ func (s *assertionStore) CreateCeremony(ctx context.Context, c webauthn.Ceremony
 func (s *assertionStore) FinalizeAssertion(ctx context.Context, t webauthn.AssertionTransition) (webauthn.Credential, identity.CommitOutcome, error) {
 	if s.observeTransition != nil {
 		s.observeTransition(t)
+	}
+	if s.removal {
+		m, _ := t.Mutation()
+		target := s.removalTarget
+		target.Context = m.Context
+		p, err := s.Store.RemovalAssertionFinalization(t, target)
+		if err != nil {
+			return webauthn.Credential{}, identity.CommitOutcomeInvalid, err
+		}
+		fields, err := p.Fields()
+		if err != nil {
+			return webauthn.Credential{}, identity.CommitOutcomeInvalid, err
+		}
+		result, runErr := s.execute(ctx, &assertionOwner{removalFinalization: p}, m.Context, fields)
+		if s.finalResult != nil && result.Outcome == identity.CommitOutcomeCommitted {
+			result = s.finalResult(result)
+		}
+		credential, err := p.Result(result)
+		if s.observeRemoval != nil {
+			s.observeRemoval(p, result)
+		}
+		if runErr != nil {
+			return webauthn.Credential{}, result.Outcome, runErr
+		}
+		return credential, result.Outcome, err
 	}
 	finalize := s.Store.AssertionFinalization
 	if s.preauth {
@@ -378,7 +458,7 @@ func (s *assertionStore) Recover(ctx context.Context, r webauthn.RecoveryRequest
 	if r.Operation != webauthn.BeginAssertionOperation && r.Operation != webauthn.AssertionOperation {
 		return identity.CommitOutcomeInvalid, webauthn.Invalid{Field: "test_recovery"}
 	}
-	p := &assertionOwner{store: s.Store, update: s.update}
+	p := &assertionOwner{store: s.Store, update: s.update, removal: s.removal, recoveryStatus: &s.recoveredProtocol}
 	coordinator, _, err := s.coordinator(p)
 	if err != nil {
 		return identity.CommitOutcomeUnknown, err
@@ -386,6 +466,9 @@ func (s *assertionStore) Recover(ctx context.Context, r webauthn.RecoveryRequest
 	op := assertionOperation(r.Operation == webauthn.AssertionOperation)
 	if s.update {
 		op = updateAssertionOperation(r.Operation == webauthn.AssertionOperation)
+	}
+	if s.removal {
+		op = removalAssertionOperation(r.Operation == webauthn.AssertionOperation)
 	}
 	q := identity.RecoveryQuery{CommandID: r.Context.CommandID, TenantID: r.Context.TenantID, UserID: r.Context.UserID, ActorID: r.Context.ActorID, ActorKind: authorization.SubjectUser, OperationID: op.OperationID, RecordID: string(r.Context.CommandID)}
 	if s.preauth {

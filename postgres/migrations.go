@@ -41,8 +41,26 @@ func (MigrationSource) Load(ctx context.Context) ([]migrations.Migration, error)
 	if e != nil {
 		return nil, webauthn.Unavailable{}
 	}
-	return []migrations.Migration{m, d, p, s, a}, nil
+	r, e := migrations.NewMigration(6, "webauthn_removal_assertion", migrations.TransactionModeDefault, removalAssertionSQL, "")
+	if e != nil {
+		return nil, webauthn.Unavailable{}
+	}
+	return []migrations.Migration{m, d, p, s, a, r}, nil
 }
+
+// The original effect's before/after remain the verifier's exact source state.
+// Add bounded target snapshots instead of overwriting that historical evidence
+// or introducing another effect journal when source and target differ.
+const removalAssertionSQL = `ALTER TABLE webauthn.effects ADD COLUMN removal_before_credential jsonb CHECK(octet_length(removal_before_credential::text)<=32768);
+ALTER TABLE webauthn.effects ADD COLUMN removal_after_credential jsonb CHECK(octet_length(removal_after_credential::text)<=32768);
+ALTER TABLE webauthn.effects ADD CONSTRAINT effects_removal_assertion_profile CHECK(
+ (removal_before_credential IS NULL AND removal_after_credential IS NULL) OR
+ (removal_before_credential IS NOT NULL AND removal_after_credential IS NOT NULL AND
+  purpose='identity.passkey.delete' AND user_id IS NOT NULL AND actor_id=user_id AND anonymous_flow_id IS NULL AND
+  enrollment_stage IS NULL AND enrollment_source IS NULL AND before_credential IS NOT NULL AND after_credential IS NOT NULL AND
+  octet_length(ceremony_id)=22 AND jsonb_typeof(ceremony)='object' AND
+  jsonb_typeof(removal_before_credential)='object' AND jsonb_typeof(removal_after_credential)='object'));
+`
 
 // An enrollment assertion authorizes a later registration only until its own
 // original expiry. Keep that independent ceiling outside the root's immutable

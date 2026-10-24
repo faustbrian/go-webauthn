@@ -41,7 +41,7 @@ func TestDiscoverablePopulatedMigrationPostgres(t *testing.T) {
 		}
 	}
 	history, e = (webauthnpg.MigrationSource{}).Load(ctx)
-	if e != nil || len(history) != 5 {
+	if e != nil || len(history) != 6 {
 		t.Fatal("forward migration history", e)
 	}
 	if _, e = pool.Raw().Exec(ctx, history[0].UpSQL()); e != nil {
@@ -170,5 +170,17 @@ func TestDiscoverablePopulatedMigrationPostgres(t *testing.T) {
 	var unchanged int
 	if e = pool.Raw().QueryRow(ctx, `SELECT count(*) FROM webauthn.ceremonies WHERE authorization_expires_at IS NULL AND authorization_ceremony_id IS NULL`).Scan(&unchanged); e != nil || unchanged < 2 {
 		t.Fatal("enrollment migration reclassified old ceremonies", e)
+	}
+	prior = snapshot()
+	if _, e = pool.Raw().Exec(ctx, history[5].UpSQL()); e != nil {
+		t.Fatal("populated removal assertion migration", e)
+	}
+	// Compare the old-binary projection, not the newly added nullable columns.
+	var migratedEffects string
+	if e = pool.Raw().QueryRow(ctx, `SELECT jsonb_agg(to_jsonb(e)-'removal_before_credential'-'removal_after_credential' ORDER BY command_id)::text FROM webauthn.effects e`).Scan(&migratedEffects); e != nil || migratedEffects != prior[1] {
+		t.Fatal("migration 6 changed retained original effect rows", e)
+	}
+	if e = pool.Raw().QueryRow(ctx, `SELECT row_to_json(c)::text FROM webauthn.credentials c`).Scan(&after); e != nil || after != before {
+		t.Fatal("migration 6 changed retained credential", e)
 	}
 }

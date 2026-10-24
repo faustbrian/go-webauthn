@@ -136,3 +136,61 @@ remove; a marker beside a pending journal remains unknown. Only an actual
 committed kernel receipt establishes historical success, never today's row.
 Recovery does not renew proof or authorize reexecution. No migration is added;
 installed migration history remains unchanged.
+
+## Current-passkey-session removal participation
+
+Install additive migration 6 before selecting `RemovalAssertionCreation` or
+`RemovalAssertionFinalization`. Migrations 1–5 and existing password-proof
+`CredentialRemoval` participation are unchanged. Removal options select canonical
+`identity.passkey.delete` with schema `identity.passkey.delete.options-v1` and
+`passkey.reauthentication.started.v1` lifecycle 0-to-1. Completion selects the
+same operation with schema `identity.passkey.delete.assertion-v1` and canonical
+`identity.passkey.remove_credential` reference N-to-N+1 lifecycle. Signin,
+rename, enrollment and password-proof profiles cannot substitute for these.
+
+`Store.RemovalAssertionCreation(CeremonyCreation)` returns the existing
+serial-use `AssertionCreation` contract. `Store.RemovalAssertionFinalization(
+AssertionTransition, RemovalRequest)` accepts only a genuine root-verified
+identified self-user assertion and the original target protocol version. Append
+its `Fields`, admit `Validate`, then call `Apply` and final `Check` with the
+actual native parent and sole Work. It consumes the original removal ceremony,
+advances the source counter/backup/version, and erases the target key atomically.
+If source and target match, the verified V-to-V+1 successor alone supplies the
+removal CAS, yielding a terminal V+2 record. Otherwise the source remains the
+exact live verified successor and the target has an independent terminal CAS.
+Both paths preserve RP-wide credential and user-handle reservations. The single
+original-parent effect row retains both bounded snapshots; all final checks
+retain the source assertion's original absolute expiry, never a renewed lease.
+
+After the actual acknowledged parent commit, `Result` returns exactly the
+root verifier's original `After` once, not the terminal target. That output is
+historical protocol evidence, not current credential admission or a session.
+Unknown, failed and replayed invocations release no verification. Use
+`RecoverRemovalAssertion` only inside the original parent's `RecoveryWork`;
+effect absence is noncommit evidence, while any effect beneath a pending
+journal remains unknown. Retain these effects at least as long as the parent
+journal. A deleted source must not be resurrected from retained snapshots for
+reverification; the parent recovers the original command instead.
+
+The native parent still owns original session/action/target binding, current
+session, CSRF, policy, risk, MFA/directory admission, remaining usable key,
+credential-reference/mapping/generation changes and lifecycle finalization.
+This participant supplies none of those permissions or effects and never opens,
+commits, retains or replaces the parent's Work.
+
+For a native-selected remaining key, call the compound participant's
+`CheckRemainingCredential(ctx, work, owner, command, credentialID)` after Apply
+and again during final precommit. It derives scope and handle from the genuine
+source, rejects the removed target, and locks the current credential plus its
+RP/handle and retained original resident-required registration provenance through
+Work completion. Only immutable registered ID/key/algorithm/handle may match;
+current counters and versions may advance. Erased/exhausted credentials deny,
+including a maximum non-backup counter that cannot advance. A completed
+registration ceremony's expiry is historical, not a credential expiry.
+Signup and self-user registration retain their different original subject
+namespaces. The returned snapshot is public protocol metadata, not recovery
+permission: the native owner still checks its selected algorithms, original
+candidate binding, active mapping/reference and current kernel authority.
+Retain original registration effects and consumed ceremony records for as long
+as their credentials can serve this selected remaining-key profile. Missing
+provenance fails closed; browser-reported `credProps` alone grants no residency.
