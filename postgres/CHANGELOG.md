@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add explicitly selected self-human assertion participation for native passkey
+  rename. Protected update-action options and finalization schemas cannot substitute
+  for sign-in; finalization and original recovery retain the parent's exact
+  metadata N-to-N+1 lifecycle independently of protocol counter versions.
+  Original-session/action binding, current authority, risk and metadata changes
+  remain parent-owned. Existing sign-in APIs and installed schema are unchanged.
+
 - Add explicit anonymous-flow registration participation for the passkey
   `.signup-v1` parent using real root-issued resident-required UV/ES256
   transitions. Pending options create no identity, stable user handle or

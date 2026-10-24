@@ -13,6 +13,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -36,6 +37,8 @@ type assertionOwner struct {
 	finalization                             *webauthnpg.AssertionFinalization
 	store                                    *webauthnpg.Store
 	discoverable                             bool
+	update                                   bool
+	lifecycle                                kernel.LifecyclePlan
 	afterApply                               func(context.Context, kernel.Work, identity.Command) error
 	failApply, failCommit, foreign, withdraw bool
 }
@@ -44,6 +47,9 @@ func (*assertionOwner) Descriptor() kernel.ContributorDescriptor {
 	return kernel.ContributorDescriptor{Owner: "passkey/postgres", ContractID: "identity.passkey", Version: 1}
 }
 func (p *assertionOwner) FeatureOperations() []identity.FeatureOperation {
+	if p.update {
+		return []identity.FeatureOperation{updateAssertionOperation(false), updateAssertionOperation(true)}
+	}
 	begin := assertionOperation(false)
 	if p.discoverable {
 		begin.SubjectRequirement = identity.FeatureSubjectAnonymousFlow
@@ -56,6 +62,13 @@ func assertionOperation(finish bool) identity.FeatureOperation {
 		id = "identity.passkey.signin-verify"
 	}
 	return identity.FeatureOperation{Owner: "passkey", OperationID: id, SchemaID: id + ".native-v1", SchemaVersion: 1, RecordRequirement: identity.FeatureRecordRequired}
+}
+func updateAssertionOperation(finish bool) identity.FeatureOperation {
+	op := identity.FeatureOperation{Owner: "passkey", OperationID: "identity.passkey.update", SchemaID: "identity.passkey.update.options-v1", SchemaVersion: 1, RecordRequirement: identity.FeatureRecordRequired}
+	if finish {
+		op.OperationID, op.SchemaID = "identity.passkey.update", "identity.passkey.update.assertion-v1"
+	}
+	return op
 }
 func (p *assertionOwner) ValidateFeatureCommand(c identity.Command, plan kernel.CommandPlan) error {
 	if c != p.command {
@@ -104,7 +117,7 @@ func (p *assertionOwner) ApplyFeature(ctx context.Context, w kernel.Work, c iden
 		}
 	}
 	s, _ := c.Feature()
-	return identity.FeatureReceipt{Operation: s.Operation, AfterVersion: 1}, nil
+	return identity.FeatureReceipt{Operation: s.Operation, BeforeVersion: p.lifecycle.BeforeVersion, AfterVersion: p.lifecycle.AfterVersion}, nil
 }
 func (p *assertionOwner) CheckFeatureCommit(ctx context.Context, w kernel.Work, c identity.Command) error {
 	if p.failCommit {
@@ -116,7 +129,19 @@ func (p *assertionOwner) CheckFeatureCommit(ctx context.Context, w kernel.Work, 
 	return p.finalization.Check(ctx, w, p, c)
 }
 func (p *assertionOwner) RecoverParticipant(ctx context.Context, w kernel.RecoveryWork) (kernel.RecoveryStatus, error) {
-	protocol, err := p.store.RecoverAssertion(ctx, w, p)
+	recoverProtocol := p.store.RecoverAssertion
+	recoverOther := p.store.RecoverUpdateAssertion
+	if p.update {
+		recoverProtocol = p.store.RecoverUpdateAssertion
+		recoverOther = p.store.RecoverAssertion
+	}
+	if _, err := recoverOther(ctx, w, p); err == nil {
+		return kernel.RecoveryUnknown, errors.New("foreign assertion profile admitted recovery")
+	}
+	if _, err := recoverProtocol(ctx, w, &assertionOwner{}); err == nil {
+		return kernel.RecoveryUnknown, errors.New("foreign assertion owner admitted recovery")
+	}
+	protocol, err := recoverProtocol(ctx, w, p)
 	if err != nil || protocol != kernel.RecoveryNotCommitted {
 		return protocol, err
 	}
@@ -144,6 +169,7 @@ type assertionStore struct {
 	config                                   kernel.CoordinatorConfig
 	preauth                                  bool
 	discoverable                             bool
+	update                                   bool
 	generationOffset                         time.Duration
 	afterApply                               func(context.Context, kernel.Work, identity.Command) error
 	failApply, failCommit, foreign, withdraw bool
@@ -151,6 +177,7 @@ type assertionStore struct {
 	observeCreation                          func(*webauthnpg.AssertionCreation, identity.CommandResult)
 	observeFinalization                      func(*webauthnpg.AssertionFinalization, identity.CommandResult)
 	observeTransition                        func(webauthn.AssertionTransition)
+	finalResult                              func(identity.CommandResult) identity.CommandResult
 }
 
 func (s *assertionStore) coordinator(p *assertionOwner) (*kernel.Coordinator, *kernel.ContributorRegistry, error) {
@@ -176,6 +203,17 @@ func (s *assertionStore) coordinator(p *assertionOwner) (*kernel.Coordinator, *k
 func (s *assertionStore) execute(ctx context.Context, p *assertionOwner, scope webauthn.CeremonyContext, fields []identity.FeatureField) (identity.CommandResult, error) {
 	op := assertionOperation(p.finalization != nil)
 	p.discoverable = s.discoverable
+	p.update = s.update
+	if s.update {
+		op = updateAssertionOperation(p.finalization != nil)
+	}
+	lifecycle := kernel.LifecyclePlan{EventType: op.OperationID + ".v1", AfterVersion: 1}
+	if s.update {
+		lifecycle.EventType = "passkey.reauthentication.started.v1"
+		if p.finalization != nil {
+			lifecycle = kernel.LifecyclePlan{EventType: "identity.passkey.rename_credential", BeforeVersion: 7, AfterVersion: 8}
+		}
+	}
 	if s.discoverable && p.finalization == nil {
 		op.SubjectRequirement = identity.FeatureSubjectAnonymousFlow
 	}
@@ -208,7 +246,16 @@ func (s *assertionStore) execute(ctx context.Context, p *assertionOwner, scope w
 	case "intent":
 		fields[0].Value.Bytes = bytes.Clone(fields[0].Value.Bytes)
 		fields[0].Value.Bytes[0] ^= 1
+	case "lifecycle-zero":
+		lifecycle.BeforeVersion, lifecycle.AfterVersion = 0, 1
+	case "lifecycle-event":
+		lifecycle.EventType = "identity.passkey.signin-verify.v1"
+	case "lifecycle-jump":
+		lifecycle.AfterVersion++
+	case "lifecycle-index":
+		lifecycle.EventIndex = 1
 	}
+	p.lifecycle = lifecycle
 	c, err := identity.NewFeatureCommand(identity.FeatureCommandSpec{Binding: b, Operation: op, Fields: fields})
 	if err != nil {
 		return identity.CommandResult{}, err
@@ -224,7 +271,7 @@ func (s *assertionStore) execute(ctx context.Context, p *assertionOwner, scope w
 	if b.ActorKind == authorization.SubjectServiceAccount {
 		actorKind = audit.ActorService
 	}
-	seed, err := builder.Build(audit.RecordInput{OccurredAt: time.Now().UTC().Truncate(time.Microsecond), Action: op.OperationID, Outcome: audit.OutcomeSucceeded, Actor: audit.ActorInput{Kind: actorKind, ID: string(b.ActorID)}, Subject: audit.SubjectInput{Type: "passkey", ID: b.RecordID}, Context: audit.ContextInput{TenantID: string(b.TenantID), CorrelationID: b.CorrelationID}, Policy: audit.PolicyMetadata{PolicyID: b.PolicyID, Version: "1"}, Changes: audit.ChangeSetInput{Redacted: true}, Attributes: map[string]string{"command.id": string(b.CommandID), "aggregate.type": "passkey", "aggregate.id": b.RecordID, "aggregate.before_version": "0", "aggregate.after_version": "1", "retention.class": "protected"}})
+	seed, err := builder.Build(audit.RecordInput{OccurredAt: time.Now().UTC().Truncate(time.Microsecond), Action: op.OperationID, Outcome: audit.OutcomeSucceeded, Actor: audit.ActorInput{Kind: actorKind, ID: string(b.ActorID)}, Subject: audit.SubjectInput{Type: "passkey", ID: b.RecordID}, Context: audit.ContextInput{TenantID: string(b.TenantID), CorrelationID: b.CorrelationID}, Policy: audit.PolicyMetadata{PolicyID: b.PolicyID, Version: "1"}, Changes: audit.ChangeSetInput{Redacted: true}, Attributes: map[string]string{"command.id": string(b.CommandID), "aggregate.type": "passkey", "aggregate.id": b.RecordID, "aggregate.before_version": strconv.FormatUint(lifecycle.BeforeVersion, 10), "aggregate.after_version": strconv.FormatUint(lifecycle.AfterVersion, 10), "retention.class": "protected"}})
 	if err != nil {
 		return identity.CommandResult{}, err
 	}
@@ -232,7 +279,7 @@ func (s *assertionStore) execute(ctx context.Context, p *assertionOwner, scope w
 	if err != nil {
 		return identity.CommandResult{}, err
 	}
-	plan, err := coordinator.PrepareCommandPlan(b, c, kernel.CommandPlan{Contributors: r.Descriptors(), SubjectType: "passkey", Feature: &kernel.FeatureRegistration{Contributor: p.Descriptor(), Operation: op}, Lifecycle: &kernel.LifecyclePlan{EventType: op.OperationID + ".v1", AfterVersion: 1}, Audits: []kernel.AuditPlan{{EventType: op.OperationID, SchemaVersion: 1, Required: true, RequiredRecordCount: 1, MaxRecordBytes: 16384, MaxAggregateBytes: 16384, RetentionPolicyVersion: 1, RetentionClass: "protected", BindingDigest: digest}}})
+	plan, err := coordinator.PrepareCommandPlan(b, c, kernel.CommandPlan{Contributors: r.Descriptors(), SubjectType: "passkey", Feature: &kernel.FeatureRegistration{Contributor: p.Descriptor(), Operation: op}, Lifecycle: &lifecycle, Audits: []kernel.AuditPlan{{EventType: op.OperationID, SchemaVersion: 1, Required: true, RequiredRecordCount: 1, MaxRecordBytes: 16384, MaxAggregateBytes: 16384, RetentionPolicyVersion: 1, RetentionClass: "protected", BindingDigest: digest}}})
 	if err != nil {
 		return identity.CommandResult{}, err
 	}
@@ -265,6 +312,15 @@ func (s *assertionStore) CreateCeremony(ctx context.Context, c webauthn.Ceremony
 	if s.preauth {
 		create = s.Store.PreauthAssertionCreation
 	}
+	if s.update {
+		create = s.Store.UpdateAssertionCreation
+	}
+	if s.invalidParent == "profile" {
+		create = s.Store.UpdateAssertionCreation
+		if s.update {
+			create = s.Store.AssertionCreation
+		}
+	}
 	p, err := create(c)
 	if err != nil {
 		return webauthn.CeremonyRecord{}, webauthn.Challenge{}, identity.CommitOutcomeInvalid, err
@@ -290,6 +346,15 @@ func (s *assertionStore) FinalizeAssertion(ctx context.Context, t webauthn.Asser
 	if s.preauth {
 		finalize = s.Store.PreauthAssertionFinalization
 	}
+	if s.update {
+		finalize = s.Store.UpdateAssertionFinalization
+	}
+	if s.invalidParent == "profile" {
+		finalize = s.Store.UpdateAssertionFinalization
+		if s.update {
+			finalize = s.Store.AssertionFinalization
+		}
+	}
 	p, err := finalize(t)
 	if err != nil {
 		return webauthn.Credential{}, identity.CommitOutcomeInvalid, err
@@ -297,6 +362,9 @@ func (s *assertionStore) FinalizeAssertion(ctx context.Context, t webauthn.Asser
 	m, _ := t.Mutation()
 	fields, _ := p.Fields()
 	result, runErr := s.execute(ctx, &assertionOwner{finalization: p}, m.Context, fields)
+	if s.finalResult != nil && result.Outcome == identity.CommitOutcomeCommitted {
+		result = s.finalResult(result)
+	}
 	credential, err := p.Result(result)
 	if s.observeFinalization != nil {
 		s.observeFinalization(p, result)
@@ -310,12 +378,15 @@ func (s *assertionStore) Recover(ctx context.Context, r webauthn.RecoveryRequest
 	if r.Operation != webauthn.BeginAssertionOperation && r.Operation != webauthn.AssertionOperation {
 		return identity.CommitOutcomeInvalid, webauthn.Invalid{Field: "test_recovery"}
 	}
-	p := &assertionOwner{store: s.Store}
+	p := &assertionOwner{store: s.Store, update: s.update}
 	coordinator, _, err := s.coordinator(p)
 	if err != nil {
 		return identity.CommitOutcomeUnknown, err
 	}
 	op := assertionOperation(r.Operation == webauthn.AssertionOperation)
+	if s.update {
+		op = updateAssertionOperation(r.Operation == webauthn.AssertionOperation)
+	}
 	q := identity.RecoveryQuery{CommandID: r.Context.CommandID, TenantID: r.Context.TenantID, UserID: r.Context.UserID, ActorID: r.Context.ActorID, ActorKind: authorization.SubjectUser, OperationID: op.OperationID, RecordID: string(r.Context.CommandID)}
 	if s.preauth {
 		if r.Operation == webauthn.BeginAssertionOperation {
@@ -342,12 +413,13 @@ func TestPreauthAssertionParticipationPostgres(t *testing.T) {
 	testAssertionParticipationPostgres(t, true)
 }
 
-func testAssertionParticipationPostgres(t *testing.T, preauth bool) {
+func testAssertionParticipationPostgres(t *testing.T, preauth bool, updateProfile ...bool) {
+	update := len(updateProfile) > 0 && updateProfile[0]
 	ctx, pool, config, native := nativeFixture(t)
 	if _, err := pool.Raw().Exec(ctx, `CREATE TABLE assertion_participation_metadata(command_id text PRIMARY KEY)`); err != nil {
 		t.Fatal(err)
 	}
-	store := &assertionStore{Store: native, pool: pool, config: config, preauth: preauth}
+	store := &assertionStore{Store: native, pool: pool, config: config, preauth: preauth, update: update}
 	key, _ := webauthn.NewChallengeDigestKey(bytes.Repeat([]byte{91}, 32))
 	serviceConfig := webauthn.Config{TenantID: "tenant-a", RelyingParty: webauthn.RelyingParty{ID: "example.com", Name: "Assertion Participant", Origins: []string{"https://login.example.com"}, Version: 1}, ChallengeKey: key, MaximumDuration: 10 * time.Second}
 	svc, err := webauthn.New(serviceConfig, webauthn.Dependencies{Store: store})
@@ -448,11 +520,15 @@ func testAssertionParticipationPostgres(t *testing.T, preauth bool) {
 		}
 		optionChallenge(t, ctx, options.TransferJSON)
 	})
-	for _, failure := range []string{"foreign", "apply", "commit", "withdraw", "scope", "tenant", "user", "actor", "kind", "intent"} {
+	creationFailures := []string{"foreign", "apply", "commit", "withdraw", "scope", "tenant", "user", "actor", "kind", "intent", "profile", "lifecycle-jump"}
+	if update {
+		creationFailures = append(creationFailures, "lifecycle-event", "lifecycle-index")
+	}
+	for _, failure := range creationFailures {
 		t.Run("creation-"+failure, func(t *testing.T) {
 			before := counts()
 			store.foreign, store.failApply, store.failCommit, store.withdraw = failure == "foreign", failure == "apply", failure == "commit", failure == "withdraw"
-			if failure == "scope" || failure == "tenant" || failure == "user" || failure == "actor" || failure == "kind" || failure == "intent" {
+			if failure == "scope" || failure == "tenant" || failure == "user" || failure == "actor" || failure == "kind" || failure == "intent" || failure == "profile" || failure == "lifecycle-jump" || failure == "lifecycle-event" || failure == "lifecycle-index" {
 				store.invalidParent = failure
 			}
 			options, err := svc.BeginAssertion(ctx, beginRequest())
@@ -481,6 +557,36 @@ func testAssertionParticipationPostgres(t *testing.T, preauth bool) {
 		ch := optionChallenge(t, ctx, options.TransferJSON)
 		c := current()
 		return webauthn.VerifyAssertionRequest{Context: beginRequest().Context, CeremonyID: r.ID, Origin: "https://login.example.com", ExpectedVersion: 1, ExpectedCredentialVersion: c.Version, Response: assertionResponse(t, private, id, handle, ch, 0x05, c.Counter+1)}
+	}
+	if update {
+		for _, mismatch := range []string{"profile", "lifecycle", "target"} {
+			t.Run("result-original-"+mismatch, func(t *testing.T) {
+				request := newAssertion(t)
+				store.finalResult = func(result identity.CommandResult) identity.CommandResult {
+					r := *result.Feature
+					result.Feature = &r
+					switch mismatch {
+					case "profile":
+						r.Operation = assertionOperation(true)
+						result.Binding.OperationID, result.Binding.SchemaID = r.Operation.OperationID, r.Operation.SchemaID
+					case "lifecycle":
+						r.BeforeVersion, r.AfterVersion = 8, 9
+					case "target":
+						result.Binding.RecordID = "different-original-target"
+					}
+					if err := result.Validate(); err != nil {
+						t.Fatal("mismatch must remain a structurally valid receipt", err)
+					}
+					return result
+				}
+				defer func() { store.finalResult = nil }()
+				if v, err := svc.VerifyAssertion(ctx, request); err == nil {
+					t.Fatal("mismatched final parent receipt released verification")
+				} else if _, ok := v.Credential(); ok {
+					t.Fatal("mismatched receipt exposed credential")
+				}
+			})
+		}
 	}
 	t.Run("original-protocol-actor-continuity", func(t *testing.T) {
 		request := newAssertion(t)
@@ -526,6 +632,9 @@ func testAssertionParticipationPostgres(t *testing.T, preauth bool) {
 			if participant, err := native.PreauthAssertionFinalization(reconstructed); err == nil || participant != nil {
 				t.Fatal("reconstructed mutation supplied preauth verifier custody")
 			}
+			if participant, err := native.UpdateAssertionFinalization(reconstructed); err == nil || participant != nil {
+				t.Fatal("reconstructed mutation supplied update verifier custody")
+			}
 		}
 		store.observeFinalization = func(p *webauthnpg.AssertionFinalization, result identity.CommandResult) {
 			alias := *p
@@ -538,12 +647,17 @@ func testAssertionParticipationPostgres(t *testing.T, preauth bool) {
 			t.Fatal(err)
 		}
 	})
-	for _, failure := range []string{"foreign", "apply", "commit", "withdraw", "scope", "tenant", "user", "actor", "kind", "intent", "success"} {
+	failures := []string{"foreign", "apply", "commit", "withdraw", "scope", "tenant", "user", "actor", "kind", "intent", "profile", "lifecycle-jump"}
+	if update {
+		failures = append(failures, "lifecycle-zero", "lifecycle-event", "lifecycle-index")
+	}
+	failures = append(failures, "success")
+	for _, failure := range failures {
 		t.Run("finalization-"+failure, func(t *testing.T) {
 			request := newAssertion(t)
 			before, c := counts(), current()
 			store.foreign, store.failApply, store.failCommit, store.withdraw = failure == "foreign", failure == "apply", failure == "commit", failure == "withdraw"
-			if failure == "scope" || failure == "tenant" || failure == "user" || failure == "actor" || failure == "kind" || failure == "intent" {
+			if failure == "scope" || failure == "tenant" || failure == "user" || failure == "actor" || failure == "kind" || failure == "intent" || failure == "profile" || failure == "lifecycle-jump" || failure == "lifecycle-zero" || failure == "lifecycle-event" || failure == "lifecycle-index" {
 				store.invalidParent = failure
 			}
 			verified, err := svc.VerifyAssertion(ctx, request)
@@ -576,8 +690,38 @@ func testAssertionParticipationPostgres(t *testing.T, preauth bool) {
 					t.Fatal("protocol/parent did not commit together")
 				}
 				var purpose string
-				if err := pool.Raw().QueryRow(ctx, `SELECT purpose FROM webauthn.effects WHERE command_id=$1`, string(request.Context.CommandID)).Scan(&purpose); err != nil || purpose != "identity.passkey.signin-verify" {
+				expectedPurpose := "identity.passkey.signin-verify"
+				if update {
+					expectedPurpose = "identity.passkey.update"
+				}
+				if err := pool.Raw().QueryRow(ctx, `SELECT purpose FROM webauthn.effects WHERE command_id=$1`, string(request.Context.CommandID)).Scan(&purpose); err != nil || purpose != expectedPurpose {
 					t.Fatal("effect detached from parent", err)
+				}
+				if update {
+					lookup := webauthn.Lookup{Context: request.Context, RPID: "example.com", CeremonyID: request.CeremonyID}
+					if snapshot, err := native.LoadCredential(ctx, lookup, id); err != nil || snapshot.Version != c.Version || snapshot.Counter != c.Counter {
+						t.Fatal("exact self-user update retry lost original credential snapshot", err)
+					}
+					for _, mismatch := range []string{"actor", "command", "tenant", "user", "rp", "ceremony"} {
+						foreign := lookup
+						switch mismatch {
+						case "actor":
+							foreign.Context.ActorID = "ingress-service"
+						case "command":
+							foreign.Context.CommandID, _ = identity.NewCommandID()
+						case "tenant":
+							foreign.Context.TenantID = "other-tenant"
+						case "user":
+							foreign.Context.UserID = "other-user"
+						case "rp":
+							foreign.RPID = "other.example.com"
+						case "ceremony":
+							foreign.CeremonyID = "other-ceremony"
+						}
+						if snapshot, err := native.LoadCredential(ctx, foreign, id); err == nil && snapshot.Version == c.Version {
+							t.Fatal("foreign update lookup selected original snapshot:", mismatch)
+						}
+					}
 				}
 				if preauth {
 					var parentActor, protocolActor string
@@ -713,7 +857,7 @@ func testAssertionParticipationPostgres(t *testing.T, preauth bool) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		cutStore := &assertionStore{Store: cutNative, pool: cutPool, config: config, preauth: preauth}
+		cutStore := &assertionStore{Store: cutNative, pool: cutPool, config: config, preauth: preauth, update: update}
 		cutService, err := webauthn.New(serviceConfig, webauthn.Dependencies{Store: cutStore})
 		if err != nil {
 			t.Fatal(err)

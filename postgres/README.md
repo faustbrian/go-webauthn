@@ -11,6 +11,25 @@ These explicit opaque participants do not independently commit, authenticate
 an identity or replace the parent's current authority and session workflow.
 Standalone store APIs retain their existing behavior.
 
+`Store.UpdateAssertionCreation` and `Store.UpdateAssertionFinalization` explicitly
+select the self-human identified ES256/UV assertion participant for passkey
+rename. Both phases use the protected `identity.passkey.update` action. Options
+require schema `identity.passkey.update.options-v1` and lifecycle
+`passkey.reauthentication.started.v1` from 0 to 1. Finalization
+requires `identity.passkey.update` with schema
+`identity.passkey.update.assertion-v1`, both version 1 with a required record,
+and lifecycle `identity.passkey.rename_credential` from metadata version N>0 to
+N+1. Both use event index 0. These metadata versions are independent of protocol
+counter versions.
+Existing sign-in participants and recovery reject these selected profiles;
+`RecoverUpdateAssertion` accepts only their original parent's recovery Work.
+Append `Fields`, invoke `Validate`, `Apply` and final `Check`, then release
+`Result` only from the actual acknowledged parent commit, as for sign-in.
+The parent must bind the original passkey session, target reference/version/name,
+CSRF, current session/MFA/passkey/directory/policy and risk, and perform the
+metadata mutation in that same Work. This protocol seam grants none of that
+authority and creates no new proof, journal, store or schema migration.
+
 The parent must preserve original-command binding, final precommit checks,
 acknowledged-result ordering and original recovery. Unknown outcomes and
 replays return no new challenge or verification. Install the identity,
