@@ -2,9 +2,11 @@ package webauthn
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
@@ -100,10 +102,33 @@ func coseKey(m map[any]any) (Algorithm, any, error) {
 			return 0, nil, Invalid{Field: "cose_key"}
 		}
 		return EdDSA, ed25519.PublicKey(bytes.Clone(x)), nil
+	case int64(RS256):
+		key, err := rsaKey(m)
+		return RS256, key, err
 	default:
 		return 0, nil, Invalid{Field: "cose_key"}
 	}
 }
+
+func rsaKey(m map[any]any) (*rsa.PublicKey, error) {
+	kty, ok := cborInteger(m[uint64(1)])
+	n, nok := m[int64(-1)].([]byte)
+	e, eok := m[int64(-2)].([]byte)
+	// RFC 8230 §4 uses unsigned, minimum-length big-endian n/e byte strings.
+	// The named compatibility profile fixes e=65537 and at least 2048 bits.
+	// Cap n at 1 KiB before big.Int allocation to bound hostile RSA work;
+	// zero padding cannot bypass either the bit or byte limit. Private and
+	// alternate members are not accepted as a public verification key.
+	if len(m) != 4 || !ok || kty != 3 || !nok || len(n) < 256 || len(n) > 1024 || n[0] == 0 || n[len(n)-1]&1 == 0 || !eok || !bytes.Equal(e, []byte{1, 0, 1}) {
+		return nil, Invalid{Field: "cose_key"}
+	}
+	modulus := new(big.Int).SetBytes(n)
+	if modulus.BitLen() < 2048 {
+		return nil, Invalid{Field: "cose_key"}
+	}
+	return &rsa.PublicKey{N: modulus, E: 65537}, nil
+}
+
 func es256Key(m map[any]any) (*ecdsa.PublicKey, error) {
 	// COSE EC2 requires kty=2, alg=-7, crv=1 and exactly 32-byte coordinates.
 	// Private-key members and alternate algorithms cannot cross this boundary.
@@ -191,7 +216,11 @@ func assertionCredential(b browserResponse, client []byte, r CeremonyRecord, bef
 	if e != nil || int32(algorithm) != before.Algorithm || !allowsAlgorithm(r.Intent.Algorithms, algorithm) {
 		return Credential{}, false, Denied{}
 	}
-	sig, e := decodeBase64(b.Response.Signature, 80)
+	maximumSignature := 80 // Existing bounded ECDSA DER and Ed25519 profiles.
+	if public, ok := key.(*rsa.PublicKey); ok {
+		maximumSignature = public.Size()
+	}
+	sig, e := decodeBase64(b.Response.Signature, maximumSignature)
 	if e != nil {
 		return Credential{}, false, e
 	}
@@ -209,6 +238,9 @@ func assertionCredential(b browserResponse, client []byte, r CeremonyRecord, bef
 		// WebAuthn §6.5.5: Ed25519 signs the message, not its SHA-256 digest;
 		// Ed25519ph and Ed25519ctx are not selected profiles.
 		valid = ed25519.Verify(public, signed, sig)
+	case *rsa.PublicKey:
+		hash := sha256.Sum256(signed)
+		valid = rsa.VerifyPKCS1v15(public, crypto.SHA256, hash[:], sig) == nil
 	}
 	if !valid {
 		return Credential{}, false, Denied{}

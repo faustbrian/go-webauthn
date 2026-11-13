@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add explicitly selected RS256 none-attestation registration and identified/
+  discoverable assertions with COSE RSA exponent 65537, a bounded 2048..8192-bit
+  modulus and PKCS#1 v1.5/SHA-256 signatures. Preserve existing nil/default
+  ES256 bytes and exact ordered ceremony policy. RSA authenticator/browser
+  interoperability and whole-unit qualification remain unverified.
+
 - Add explicit Ed25519 algorithm selection for none-attestation registration
   and identified/discoverable assertions. Ordered algorithm policy is copied,
   exactly advertised and frozen into ceremony authority; changing it rejects

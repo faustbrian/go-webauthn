@@ -1,5 +1,5 @@
 // Package webauthn implements a bounded WebAuthn Level 3 none-attestation,
-// ES256 or explicitly selected Ed25519 protocol profile. It does not authorize
+// ES256 or explicitly selected Ed25519/RS256 protocol profile. It does not authorize
 // identity enrollment or issue sessions. Trusted workflows authorize context first.
 package webauthn
 
@@ -120,6 +120,10 @@ const (
 	ES256 Algorithm = -7
 	// EdDSA selects only Ed25519 (COSE alg=-8, kty=1, crv=6), not Ed448.
 	EdDSA Algorithm = -8
+	// RS256 selects RSA PKCS#1 v1.5 with SHA-256 (COSE alg=-257, kty=3),
+	// exponent 65537 and a 2048..8192-bit modulus. PSS and other RSA profiles
+	// are unsupported; the finite modulus bound limits untrusted public-key work.
+	RS256 Algorithm = -257
 )
 
 // Config selects one trusted tenant and one RP. This finite profile always
@@ -132,7 +136,7 @@ type Config struct {
 	Extensions   ExtensionRequestSet
 	// Algorithms is an ordered, copied allowlist used for both ceremonies.
 	// Nil preserves the legacy ES256-only profile and stored ceremony bytes.
-	// An explicit list must be nonempty, unique and limited to ES256/EdDSA.
+	// An explicit list must be nonempty, unique and limited to ES256/EdDSA/RS256.
 	// Changing it invalidates in-flight ceremonies; also advance RP.Version.
 	Algorithms               []Algorithm
 	ChallengeKey             ChallengeDigestKey

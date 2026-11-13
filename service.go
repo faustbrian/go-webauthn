@@ -26,11 +26,11 @@ func New(c Config, d Dependencies) (Service, error) {
 		return nil, Invalid{Field: "configuration"}
 	}
 	seen := map[string]bool{}
-	if c.Algorithms != nil && (len(c.Algorithms) == 0 || len(c.Algorithms) > 2) {
+	if c.Algorithms != nil && (len(c.Algorithms) == 0 || len(c.Algorithms) > 3) {
 		return nil, Invalid{Field: "algorithms"}
 	}
 	for i, algorithm := range c.Algorithms {
-		if algorithm != ES256 && algorithm != EdDSA || slices.Contains(c.Algorithms[:i], algorithm) {
+		if algorithm != ES256 && algorithm != EdDSA && algorithm != RS256 || slices.Contains(c.Algorithms[:i], algorithm) {
 			return nil, Invalid{Field: "algorithms"}
 		}
 	}

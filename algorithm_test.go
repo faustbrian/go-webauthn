@@ -5,11 +5,13 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"math/big"
 	"slices"
 	"testing"
 	"time"
@@ -33,7 +35,7 @@ func TestAlgorithmConfigurationSnapshotsExactSelection(t *testing.T) {
 	c := Config{TenantID: "tenant", RelyingParty: RelyingParty{ID: "example.com", Name: "Example", Origins: []string{"https://example.com"}, Version: 1}, ChallengeKey: key, MaximumDuration: time.Second}
 	// Construction owns only configuration validation: no store method is called.
 	d := Dependencies{Store: struct{ Store }{}}
-	for _, invalid := range [][]Algorithm{{}, {ES256, ES256}, {EdDSA, EdDSA}, {-257}, {0}, {ES256, EdDSA, ES256}} {
+	for _, invalid := range [][]Algorithm{{}, {ES256, ES256}, {EdDSA, EdDSA}, {RS256, RS256}, {-37}, {0}, {ES256, EdDSA, ES256}} {
 		c.Algorithms = invalid
 		if s, err := New(c, d); err == nil || s != nil {
 			t.Fatal("invalid algorithm policy accepted", invalid)
@@ -181,6 +183,9 @@ func TestIndependentOpenSSLEd25519WebAuthnSignature(t *testing.T) {
 }
 
 func FuzzSelectedCOSEKeys(f *testing.F) {
+	n, _ := base64.RawURLEncoding.DecodeString(rfc7515Modulus)
+	f.Add(rsaCOSE(&rsa.PublicKey{N: new(big.Int).SetBytes(n), E: 65537}))
+	f.Add(rsaCOSE(&rsa.PublicKey{N: new(big.Int).SetBytes(bytes.Repeat([]byte{255}, 1025)), E: 65537}))
 	f.Add([]byte{0xa4, 1, 1, 3, 0x27, 0x20, 6, 0x21, 0x58, 32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
 	f.Add([]byte{0xa0})
 	f.Fuzz(func(t *testing.T, wire []byte) {

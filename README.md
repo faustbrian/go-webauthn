@@ -1,6 +1,6 @@
 # go-webauthn
 
-**Selected identified-user and discoverable none/ES256 or opt-in Ed25519 profiles; whole-unit qualification
+**Selected identified-user and discoverable none/ES256 or opt-in Ed25519/RS256 profiles; whole-unit qualification
 and release remain incomplete.**
 
 The root module owns WebAuthn protocol verification. The independent
@@ -8,7 +8,7 @@ The root module owns WebAuthn protocol verification. The independent
 through the existing identity coordinator. Neither owns identity enrollment
 authorization, sessions, passkey workflows, browser UI or HTTP routes.
 
-The candidate defaults to ES256, with explicit Ed25519 selection, `none` attestation, exact tenant/
+The candidate defaults to ES256, with explicit Ed25519 or RS256 selection, `none` attestation, exact tenant/
 RP/origin binding, mandatory UP/UV, 32-byte opaque user handles, five-minute
 single-use challenges, typed `credProps`/`credProtect`, backup flags and counter
 policy. Unsupported variants fail closed. Source identity, precise bounds and
@@ -134,8 +134,15 @@ A reserved command that is denied or rolled back can retain its separate
 original no-change failure audit; it cannot retain a partial success mutation
 or lifecycle effect.
 
+RS256 is the explicit compatibility profile: COSE RSA, exponent 65537,
+2048..8192-bit minimally encoded odd modulus and PKCS#1 v1.5/SHA-256.
+PSS, SHA-1 and other RSA profiles are rejected. Signature bounds derive from
+the validated key size; existing nil/default ES256 ceremony bytes are unchanged.
+The official public-key and independent OpenSSL fixtures establish selected
+cryptographic behavior, not RSA authenticator/browser interoperability.
+
 Current exclusions include shared RP tenancy,
-RSA, trusted attestation/metadata, credential management, key rotation,
+trusted attestation/metadata, credential management, key rotation,
 passkeys, sessions and reference/HTTP composition. They remain requirements of
 the complete retained goals, not silently removed obligations.
 

@@ -2,7 +2,7 @@
 
 These are finite **selected ceremony profiles**, not whole-unit
 conformance or a release. The supported algorithm/attestation combinations are ES256 or
-explicitly selected Ed25519 with `none`; unsupported profiles fail closed. RSA, trusted attestation,
+explicitly selected Ed25519/RS256 with `none`; unsupported profiles fail closed. Trusted attestation,
 metadata, sessions, passkey orchestration and reference/HTTP
 composition remain later scope under the complete retained goals.
 The discoverable profile is a native prerequisite for later passkey integration,
@@ -16,6 +16,9 @@ not closure of M16's signup, session and management journeys.
 | [Web Platform Tests](https://codeload.github.com/web-platform-tests/wpt/tar.gz/9bc6e2404bff5349e48d7962b0a495582bc5ade8) | `9bc6e2404bff5349e48d7962b0a495582bc5ade8` | `559c6d1edbff75dfbacb10a3466a36da8897dc3f586da1866a7b718f928a837a` |
 | [EdDSA](https://www.rfc-editor.org/rfc/rfc8032.txt) | RFC 8032, January 2017; §7.1 TEST 1 public key/signature | `ed63657ff389301282b169b0abde9b5dd2c7e4d524fdfa5da6ff3094fc93c4c3` |
 | [COSE algorithms](https://www.rfc-editor.org/rfc/rfc9053.txt) | RFC 9053, August 2022; EdDSA and OKP key parameters | `3d470615875620375f8453ba25b8dce7e4d0271e76b0b79a46df34ccb2d56ab0` |
+| [RSA COSE parameters](https://www.rfc-editor.org/rfc/rfc8230.txt) | RFC 8230, September 2017; section 4 public RSA encoding and section 6.1 resource limits | `d59c3f07682118a937092cd2b07c3d2f3aa97dca034ed90fb11f621fbf58ae05` |
+| [RS256 COSE algorithm](https://www.rfc-editor.org/rfc/rfc8812.txt) | RFC 8812, August 2020; section 2, RSA PKCS#1 v1.5/SHA-256, minimum 2048 bits; raw UTF-8 bytes including BOM | `7f49c0c7a73a854312fa8acedda53e51831c2a17b4115ab781f2038681a9e0d2` |
+| [Official public RSA key](https://www.rfc-editor.org/rfc/rfc7515.txt) | RFC 7515, May 2015; Appendix A.2.1, public n/e only | `ecbf84674118e62526511c1237e1deaa86aada86d25b247623a2a7e04ae62e40` |
 
 The complete PSL is embedded unchanged from `docs/public_suffix_list.dat`.
 It is Mozilla Public License 2.0; its upstream license notice is retained in
@@ -40,6 +43,20 @@ is retained. An additional fixed WebAuthn-format signature was generated on
 Ed25519 key. Its public key/signature and exact client data are retained in
 `algorithm_test.go`; the private key is discarded. This is independent crypto
 verification, not an independent authenticator/browser ceremony claim.
+The explicit RS256 compatibility profile selects `alg=-257`, `kty=3`,
+unsigned minimally encoded modulus/exponent byte strings, exponent 65537 and
+PKCS#1 v1.5/SHA-256. The modulus is 2048..8192 bits, bounded to 1 KiB before
+big-integer allocation; its odd/nonzero/minimum-length checks reject invalid
+RSA public-key shapes. This finite local resource limit is not a claim that
+WebAuthn forbids larger RSA keys. Private and extra COSE members, PSS and SHA-1
+are unsupported. Decoded assertion signatures cannot exceed the validated
+modulus size; PKCS#1 verification additionally requires the exact key-sized
+signature and hashes the exact WebAuthn signed bytes.
+`rs256_test.go` retains only RFC 7515's published public modulus/exponent. The
+[RSA fixture provenance](../testdata/rs256/README.md) records an independently
+generated OpenSSL 3.5.9 3072-bit WebAuthn-format signature, its public key,
+source identities and regeneration procedure. It is independent crypto proof,
+not an RSA authenticator/browser or trusted-attestation claim.
 Configured origins follow [RFC6454 §6.2](https://www.rfc-editor.org/rfc/rfc6454#section-6.2)
 serialization: default ports and an empty trailing port delimiter are rejected,
 not silently normalized into a different exact-origin policy.
