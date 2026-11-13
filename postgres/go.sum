@@ -71,6 +71,8 @@ github.com/faustbrian/go-transactional-outbox/v2 v2.0.2-0.20261015062550-37ea154
 github.com/faustbrian/go-transactional-outbox/v2 v2.0.2-0.20261015062550-37ea15436ae9/go.mod h1:qiFFS93F3PU3bdnC/g/0dhkWsxjjqBiHWl/ctFxKTRw=
 github.com/faustbrian/go-webauthn v0.0.0-20261020074004-ed89b240ab20 h1:sLsSRHF4pb9AejvhLvZAjBsPVXii6o4XxnI3+QhvS68=
 github.com/faustbrian/go-webauthn v0.0.0-20261020074004-ed89b240ab20/go.mod h1:GEdL4XWkuetUkfxRonD6dyoLxn6sTmrPruYVrx6RoHs=
+github.com/faustbrian/go-webauthn v0.0.0-20261113073617-d7f4fe527c15 h1:EGBGWwLLWzG8QiF2O9oypzRFDKq8Q+JhoK/xyvRa9PI=
+github.com/faustbrian/go-webauthn v0.0.0-20261113073617-d7f4fe527c15/go.mod h1:GEdL4XWkuetUkfxRonD6dyoLxn6sTmrPruYVrx6RoHs=
 github.com/felixge/httpsnoop v1.1.0 h1:3YtUj32ZZkqZtt3sZZsClsymw/QDuVfpNhoA31zeORc=
 github.com/felixge/httpsnoop v1.1.0/go.mod h1:Zqxgdd+1Rkcz8euOqdr7lqgCRJztwr5hp9vDSi5UZCE=
 github.com/go-logr/logr v1.4.4 h1:tG4xh9yMsRCAiodLVTxyrkzSZ9+o0L1Kg/+cPVcbP/8=

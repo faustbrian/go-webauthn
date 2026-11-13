@@ -13,14 +13,16 @@ Standalone store APIs retain their existing behavior.
 
 All native registration/signup, identified/preauthentication, discovery, update,
 session-enrollment and removal-assertion participants accept the root verifier's
-ES256 or Ed25519 profiles, including an explicit ordered allowlist containing
-both. Nil remains the legacy ES256-only profile; empty lists, duplicates, RSA
+ES256, Ed25519 or RS256 profiles, including an explicit ordered allowlist containing
+all three. Nil remains the legacy ES256-only profile; empty lists, duplicates, RSA-PSS
 and unknown algorithms deny. The root still owns COSE/key/signature verification;
 the participant requires the verified credential's algorithm to belong to the
 original ceremony and never changes its algorithm during assertion finalization.
 Profile order and nil/explicit representation remain part of the original intent,
 command digest and recovery identity. Changing the root's selected profile cannot
-reinterpret an in-flight ceremony. These additive selections require no schema
+reinterpret an in-flight ceremony. RS256 selects the root's exponent-65537,
+2048..8192-bit PKCS#1 v1.5/SHA-256 compatibility profile, not trusted attestation.
+These additive selections require no schema
 migration and grant no parent identity/session authority.
 
 Session-bound additional enrollment explicitly selects three profiles, all

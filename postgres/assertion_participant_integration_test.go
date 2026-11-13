@@ -564,9 +564,9 @@ func testAssertionAlgorithmsPostgres(t *testing.T, preauth, update bool, profile
 			t.Fatal("unsupported creation exposed options")
 		}
 		expanded := serviceConfig
-		expanded.Algorithms = []webauthn.Algorithm{webauthn.ES256, -257}
+		expanded.Algorithms = []webauthn.Algorithm{webauthn.ES256, -37}
 		if _, err := webauthn.New(expanded, webauthn.Dependencies{Store: store}); err == nil {
-			t.Fatal("unsupported RSA algorithm profile accepted")
+			t.Fatal("unsupported RSA-PSS algorithm profile accepted")
 		}
 		request := beginRequest()
 		request.Context.ActorID = "different-actor"

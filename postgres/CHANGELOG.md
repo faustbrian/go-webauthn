@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Accept explicitly selected, root-verified RS256 in the existing registration
+  and assertion participant profiles. Exact original ordered policy, credential
+  algorithm and final commit/recovery authority remain mandatory; legacy nil
+  stays ES256-only. Existing storage and installed migrations are unchanged.
+
 - Accept root-verified Ed25519 and explicit mixed ES256/Ed25519 profiles in
   native passkey registration/signup, identified/preauthentication, discovery,
   update, session-enrollment and removal-assertion participants. Preserve each

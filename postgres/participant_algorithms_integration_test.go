@@ -9,6 +9,7 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"slices"
 	"testing"
 	"time"
@@ -34,6 +35,13 @@ func mixedParticipantProfile() participantProfile {
 
 func (p participantProfile) key(t *testing.T) crypto.Signer {
 	t.Helper()
+	if p.algorithm == -257 {
+		key, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return key
+	}
 	if p.algorithm == webauthn.EdDSA {
 		_, key, err := ed25519.GenerateKey(rand.Reader)
 		if err != nil {
@@ -50,6 +58,9 @@ func (p participantProfile) key(t *testing.T) crypto.Signer {
 
 func (participantProfile) registration(t *testing.T, key crypto.Signer, id []byte, challenge string, flags byte, count uint32) []byte {
 	t.Helper()
+	if rsa, ok := key.(*rsa.PrivateKey); ok {
+		return edRegistrationCOSECounter(t, rsaCOSEWire(&rsa.PublicKey), id, challenge, flags, count)
+	}
 	if ed, ok := key.(ed25519.PrivateKey); ok {
 		public := ed.Public().(ed25519.PublicKey)
 		cose := append([]byte{0xa4, 1, 1, 3, 0x27, 0x20, 6, 0x21, 0x58, 32}, public...)
@@ -60,6 +71,9 @@ func (participantProfile) registration(t *testing.T, key crypto.Signer, id []byt
 
 func (participantProfile) assertion(t *testing.T, key crypto.Signer, id, handle []byte, challenge string, flags byte, count uint32) []byte {
 	t.Helper()
+	if rsa, ok := key.(*rsa.PrivateKey); ok {
+		return rsaAssertionResponse(t, rsa, id, handle, challenge, flags, count)
+	}
 	if ed, ok := key.(ed25519.PrivateKey); ok {
 		return edAssertion(t, ed, id, handle, challenge, flags, count)
 	}

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -40,7 +41,7 @@ type RegistrationFinalization struct {
 }
 
 // RegistrationCreation borrows the existing protocol store and opaque creation.
-// Only authenticated resident-required ES256/Ed25519 enrollment is selected.
+// Only authenticated resident-required ES256/Ed25519/RS256 enrollment is selected.
 // Creation must come from the real root service configured with that profile.
 // The caller owns pool lifetime and must Discard on all abandoned/failure paths.
 func (s *Store) RegistrationCreation(input webauthn.CeremonyCreation) (*RegistrationCreation, error) {
@@ -74,11 +75,11 @@ func registrationAlgorithms(selected []webauthn.Algorithm) bool {
 	if selected == nil {
 		return true
 	}
-	if len(selected) == 0 || len(selected) > 2 {
+	if len(selected) == 0 || len(selected) > 3 {
 		return false
 	}
 	for index, algorithm := range selected {
-		if algorithm != webauthn.ES256 && algorithm != webauthn.EdDSA || index > 0 && algorithm == selected[0] {
+		if algorithm != webauthn.ES256 && algorithm != webauthn.EdDSA && algorithm != webauthn.RS256 || slices.Contains(selected[:index], algorithm) {
 			return false
 		}
 	}
@@ -86,7 +87,7 @@ func registrationAlgorithms(selected []webauthn.Algorithm) bool {
 }
 
 // The root verifier owns exact COSE key/signature verification. Participants
-// select only its ES256/Ed25519 passkey profile and never reinterpret nil's
+// select only its explicit ES256/Ed25519/RS256 profile and never reinterpret nil's
 // legacy ES256 default or normalize the original digest/recovery input.
 func registrationAlgorithm(algorithm int32, selected []webauthn.Algorithm) bool {
 	if !registrationAlgorithms(selected) {
