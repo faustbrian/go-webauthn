@@ -81,7 +81,9 @@ jobs:
           set -euo pipefail
           case "${EVENT_NAME}" in
             pull_request|push)
-              timeout --signal=TERM --kill-after=5s 40s golib secrets check --base-sha "${BASE_SHA}"
+              # The scanner bounds the immutable-range check itself, including
+              # a cold build of its pinned detector.
+              golib secrets check --base-sha "${BASE_SHA}"
               ;;
             schedule|workflow_dispatch) golib secrets check ;;
             *) echo 'unsupported planning event' >&2; exit 1 ;;
